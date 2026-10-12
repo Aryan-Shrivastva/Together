@@ -1,0 +1,68 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-together}
+      POSTGRES_USER: ${POSTGRES_USER:-together}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    ports:
+      - '${POSTGRES_PORT:-5432}:5432'
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-together} -d ${POSTGRES_DB:-together}']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  server:
+    build:
+      context: .
+      dockerfile: server/Dockerfile
+    environment:
+      NODE_ENV: development
+      SERVER_PORT: ${SERVER_PORT:-4000}
+      CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:5173}
+      WORKSPACE_ROOT: ${WORKSPACE_ROOT:-/data/workspaces}
+      WORKSPACE_CLONE_TIMEOUT_MS: ${WORKSPACE_CLONE_TIMEOUT_MS:-120000}
+      INVITE_TTL_HOURS: ${INVITE_TTL_HOURS:-168}
+      MAX_FILE_OPEN_BYTES: ${MAX_FILE_OPEN_BYTES:-1048576}
+      FILE_TREE_MAX_ENTRIES: ${FILE_TREE_MAX_ENTRIES:-10000}
+      COLLABORATION_PERSIST_DEBOUNCE_MS: ${COLLABORATION_PERSIST_DEBOUNCE_MS:-1500}
+      COLLABORATION_DOC_UNLOAD_MS: ${COLLABORATION_DOC_UNLOAD_MS:-30000}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-together}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-together}?schema=public
+      GITHUB_CLIENT_ID: ${GITHUB_CLIENT_ID:-}
+      GITHUB_CLIENT_SECRET: ${GITHUB_CLIENT_SECRET:-}
+      GITHUB_OAUTH_REDIRECT_URL: ${GITHUB_OAUTH_REDIRECT_URL:-}
+      JWT_SECRET: ${JWT_SECRET:-}
+      TOKEN_ENCRYPTION_KEY: ${TOKEN_ENCRYPTION_KEY:-}
+    ports:
+      - '${SERVER_PORT:-4000}:${SERVER_PORT:-4000}'
+    volumes:
+      - .:/app
+      - root_node_modules:/app/node_modules
+      - workspace_data:/data/workspaces
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  client:
+    build:
+      context: .
+      dockerfile: client/Dockerfile
+    environment:
+      CLIENT_PORT: ${CLIENT_PORT:-5173}
+      VITE_API_PROXY_TARGET: ${VITE_API_PROXY_TARGET:-http://server:4000}
+      VITE_ALLOWED_HOSTS: ${VITE_ALLOWED_HOSTS:-localhost}
+    ports:
+      - '${CLIENT_PORT:-5173}:${CLIENT_PORT:-5173}'
+    volumes:
+      - .:/app
+      - root_node_modules:/app/node_modules
+    depends_on:
+      - server
+
+volumes:
+  postgres_data:
+  root_node_modules:
+  workspace_data:

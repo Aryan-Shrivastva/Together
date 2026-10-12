@@ -1,0 +1,91 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum WorkspaceStatus {
+  CLONING
+  READY
+  ERROR
+}
+
+enum WorkspaceRole {
+  OWNER
+  COLLABORATOR
+}
+
+model User {
+  id                          String            @id @default(cuid())
+  githubId                    String            @unique
+  username                    String
+  avatarUrl                   String
+  email                       String?
+  githubAccessTokenEncrypted  String
+  createdAt                   DateTime          @default(now())
+  ownedWorkspaces             Workspace[]       @relation("WorkspaceOwner")
+  memberships                 WorkspaceMember[]
+  createdInvites              Invite[]          @relation("InviteCreator")
+  chatMessages                ChatMessage[]
+}
+
+model Workspace {
+  id            String            @id @default(cuid())
+  name          String
+  repoFullName  String
+  repoCloneUrl  String
+  defaultBranch String
+  ownerId       String
+  diskPath      String
+  status        WorkspaceStatus   @default(CLONING)
+  createdAt     DateTime          @default(now())
+  owner         User              @relation("WorkspaceOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+  members       WorkspaceMember[]
+  invites       Invite[]
+  chatMessages  ChatMessage[]
+
+  @@index([ownerId])
+}
+
+model WorkspaceMember {
+  id          String        @id @default(cuid())
+  workspaceId String
+  userId      String
+  role        WorkspaceRole
+  joinedAt    DateTime      @default(now())
+  workspace   Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user        User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, userId])
+  @@index([userId])
+}
+
+model Invite {
+  id          String    @id @default(cuid())
+  workspaceId String
+  token       String    @unique
+  createdById String
+  expiresAt   DateTime
+  revoked     Boolean   @default(false)
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  createdBy   User      @relation("InviteCreator", fields: [createdById], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId])
+  @@index([createdById])
+}
+
+model ChatMessage {
+  id          String    @id @default(cuid())
+  workspaceId String
+  userId      String
+  content     String
+  createdAt   DateTime  @default(now())
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, createdAt])
+  @@index([userId])
+}
