@@ -98,7 +98,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       error,
       refresh,
       signIn: () => {
-        const returnTo = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+        const params = new URLSearchParams(window.location.search);
+        params.delete('auth');
+        const search = params.toString();
+        const returnTo = `${window.location.pathname}${search ? `?${search}` : ''}${window.location.hash}`;
         window.location.assign(`/auth/github?returnTo=${encodeURIComponent(returnTo)}`);
       },
       signOut: async () => {

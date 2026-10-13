@@ -288,10 +288,10 @@ export function Dashboard() {
       <section className="mx-auto max-w-6xl">
         <header className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-800 pb-6">
           <div>
-            <p className="text-sm font-semibold uppercase tracking-[0.2em] text-cyan-400">
+            <p className="text-sm font-semibold uppercase tracking-[0.2em] text-cyan-300">
               Together
             </p>
-            <h1 className="mt-2 text-3xl font-bold">Your workspaces</h1>
+            <h1 className="font-display mt-2 text-5xl text-slate-50">Your workspaces</h1>
           </div>
           <div className="flex items-center gap-3">
             {user?.avatarUrl ? (

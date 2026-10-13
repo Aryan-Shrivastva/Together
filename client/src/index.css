@@ -1,11 +1,78 @@
 @import 'tailwindcss';
 
+/*
+  Mecha no Onna (メカの女) — HANCORE-linux/omarchy-mechanoonna-theme, V2.
+  Warm amber on a deep neutral ground, with frosted glass surfaces.
+*/
+@theme {
+  --font-sans: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  --font-display: 'Cormorant Garamond', Georgia, serif;
+
+  --color-slate-950: #0e0b08;
+  --color-slate-900: #161412;
+  --color-slate-800: #232220;
+  --color-slate-700: #45413a;
+  --color-slate-600: #6b655c;
+  --color-slate-500: #8e8373;
+  --color-slate-400: #a89984;
+  --color-slate-300: #cbae8e;
+  --color-slate-200: #f0e4c5;
+  --color-slate-100: #fbf1c7;
+  --color-slate-50: #fff8e8;
+
+  --color-cyan-50: #fff8e8;
+  --color-cyan-100: #fbf1c7;
+  --color-cyan-200: #f7df97;
+  --color-cyan-300: #e7c07c;
+  --color-cyan-400: #d4bd99;
+  --color-cyan-500: #c2a571;
+  --color-cyan-600: #a89984;
+
+  --color-rose-100: #f0e4c5;
+  --color-rose-200: #ebdbb2;
+  --color-rose-300: #d94e38;
+  --color-rose-400: #c5564a;
+  --color-rose-500: #c5564a;
+
+  --color-emerald-200: #ebdbb2;
+  --color-emerald-300: #c2a571;
+  --color-emerald-400: #a89984;
+  --color-emerald-500: #a89984;
+
+  --color-amber-100: #fff8e8;
+  --color-amber-200: #f7df97;
+  --color-amber-300: #e7c07c;
+  --color-amber-400: #d4bd99;
+  --color-amber-500: #c2a571;
+}
+
 :root {
-  font-family: Inter, ui-sans-serif, system-ui, sans-serif;
-  color: #f1f5f9;
-  background: #020617;
+  color: #f0e4c5;
+  background: #0e0b08;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
 }
 
 body {
   margin: 0;
+  min-height: 100vh;
+  background:
+    radial-gradient(ellipse 80% 50% at 10% -10%, rgba(231, 192, 124, 0.16), transparent 55%),
+    radial-gradient(ellipse 60% 40% at 100% 0%, rgba(212, 189, 153, 0.1), transparent 50%), #0e0b08;
+}
+
+::selection {
+  background: #706e6b;
+  color: #f0e4c5;
+}
+
+.font-display {
+  font-family: var(--font-display);
+}
+
+.glass {
+  background: rgba(28, 27, 25, 0.72);
+  border: 1px solid rgba(240, 228, 197, 0.12);
+  box-shadow: 0 24px 80px rgba(14, 11, 8, 0.45);
+  backdrop-filter: blur(18px);
 }

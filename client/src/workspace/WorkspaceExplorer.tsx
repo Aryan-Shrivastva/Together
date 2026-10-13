@@ -10,6 +10,28 @@ import { useAuth } from '../auth/AuthContext';
 
 loader.config({ monaco });
 
+monaco.editor.defineTheme('mechanoonna', {
+  base: 'vs-dark',
+  inherit: true,
+  rules: [
+    { token: 'comment', foreground: '8e8373', fontStyle: 'italic' },
+    { token: 'keyword', foreground: 'e7c07c' },
+    { token: 'string', foreground: 'c2a571' },
+    { token: 'number', foreground: 'ebdbb2' },
+  ],
+  colors: {
+    'editor.background': '#1c1b19',
+    'editor.foreground': '#f0e4c5',
+    'editorCursor.foreground': '#f0e4c5',
+    'editor.selectionBackground': '#706e6b',
+    'editor.lineHighlightBackground': '#232220',
+    'editorLineNumber.foreground': '#6b655c',
+    'editorLineNumber.activeForeground': '#d4bd99',
+    'editorWidget.background': '#161412',
+    'minimap.background': '#161412',
+  },
+});
+
 type Workspace = {
   id: string;
   name: string;
@@ -781,11 +803,11 @@ export function WorkspaceExplorer({ workspaceId }: { workspaceId: string }) {
 
   return (
     <main
-      className="h-screen overflow-hidden bg-[#181818] text-slate-100"
+      className="h-screen overflow-hidden bg-[#161412] text-slate-100"
       onClick={() => setContextMenu(null)}
     >
       <section className="flex h-full min-w-0 flex-col">
-        <header className="flex h-9 shrink-0 items-center border-b border-[#171717] bg-[#252526] px-3 text-xs text-[#cccccc]">
+        <header className="flex h-9 shrink-0 items-center border-b border-[#0e0b08] bg-[#232220] px-3 text-xs text-[#f0e4c5]">
           <div className="flex min-w-0 items-center gap-4">
             <span
               className="grid h-5 w-5 place-items-center text-base text-cyan-300"
@@ -804,12 +826,12 @@ export function WorkspaceExplorer({ workspaceId }: { workspaceId: string }) {
               <span>Help</span>
             </nav>
           </div>
-          <p className="mx-auto max-w-[45%] truncate rounded border border-[#3c3c3c] bg-[#1e1e1e] px-3 py-1 text-center text-[#bdbdbd]">
+          <p className="mx-auto max-w-[45%] truncate rounded border border-[#45413a] bg-[#1c1b19] px-3 py-1 text-center text-[#d4bd99]">
             {workspace?.name ?? 'Together'}
           </p>
           <div className="ml-auto flex shrink-0 items-center gap-1">
             <button
-              className={`grid h-7 w-7 place-items-center rounded text-base hover:bg-[#3c3c3c] hover:text-white ${isExplorerOpen ? 'text-cyan-200' : 'text-[#aaaaaa]'}`}
+              className={`grid h-7 w-7 place-items-center rounded text-base hover:bg-[#45413a] hover:text-white ${isExplorerOpen ? 'text-cyan-200' : 'text-[#a89984]'}`}
               title="Toggle Explorer"
               type="button"
               aria-label="Toggle Explorer"
@@ -818,7 +840,7 @@ export function WorkspaceExplorer({ workspaceId }: { workspaceId: string }) {
               ▯
             </button>
             <button
-              className={`grid h-7 w-7 place-items-center rounded text-base hover:bg-[#3c3c3c] hover:text-white ${isBottomPanelOpen ? 'text-cyan-200' : 'text-[#aaaaaa]'}`}
+              className={`grid h-7 w-7 place-items-center rounded text-base hover:bg-[#45413a] hover:text-white ${isBottomPanelOpen ? 'text-cyan-200' : 'text-[#a89984]'}`}
               title="Toggle bottom panel"
               type="button"
               aria-label="Toggle bottom panel"
@@ -827,7 +849,7 @@ export function WorkspaceExplorer({ workspaceId }: { workspaceId: string }) {
               ▰
             </button>
             <button
-              className={`grid h-7 w-7 place-items-center rounded text-base hover:bg-[#3c3c3c] hover:text-white ${isCollaborationPanelOpen ? 'bg-[#3c3c3c] text-cyan-200' : 'text-[#aaaaaa]'}`}
+              className={`grid h-7 w-7 place-items-center rounded text-base hover:bg-[#45413a] hover:text-white ${isCollaborationPanelOpen ? 'bg-[#45413a] text-cyan-200' : 'text-[#a89984]'}`}
               title="Open team chat"
               type="button"
               aria-label="Open team chat"
@@ -846,17 +868,17 @@ export function WorkspaceExplorer({ workspaceId }: { workspaceId: string }) {
         </header>
 
         {error ? (
-          <p className="absolute left-1/2 top-12 z-20 -translate-x-1/2 rounded border border-rose-500/50 bg-[#2a1518] px-4 py-2 text-sm text-rose-200 shadow-xl">
+          <p className="absolute left-1/2 top-12 z-20 -translate-x-1/2 rounded border border-rose-500/50 bg-[#2a1614] px-4 py-2 text-sm text-rose-200 shadow-xl">
             {error}
           </p>
         ) : null}
         {liveUpdateError ? (
-          <p className="absolute left-1/2 top-12 z-20 -translate-x-1/2 rounded border border-amber-500/50 bg-[#2a2115] px-4 py-2 text-sm text-amber-200 shadow-xl">
+          <p className="absolute left-1/2 top-12 z-20 -translate-x-1/2 rounded border border-amber-500/50 bg-[#2a2218] px-4 py-2 text-sm text-amber-200 shadow-xl">
             {liveUpdateError}
           </p>
         ) : null}
         {collaborationStatus === 'Reconnecting collaboration…' ? (
-          <p className="absolute left-1/2 top-24 z-20 -translate-x-1/2 rounded border border-amber-500/50 bg-[#2a2115] px-4 py-2 text-sm text-amber-200 shadow-xl">
+          <p className="absolute left-1/2 top-24 z-20 -translate-x-1/2 rounded border border-amber-500/50 bg-[#2a2218] px-4 py-2 text-sm text-amber-200 shadow-xl">
             Reconnecting collaboration. Editing is temporarily paused.
           </p>
         ) : null}
@@ -871,14 +893,14 @@ export function WorkspaceExplorer({ workspaceId }: { workspaceId: string }) {
         ) : null}
 
         {!isLoading && workspace?.status === 'READY' ? (
-          <section className="relative flex min-h-0 flex-1 flex-col overflow-hidden bg-[#1e1e1e]">
+          <section className="relative flex min-h-0 flex-1 flex-col overflow-hidden bg-[#1c1b19]">
             <div className="flex min-h-0 flex-1 overflow-hidden">
               <nav
-                className="flex w-12 shrink-0 flex-col items-center border-r border-[#333] bg-[#333333] py-2 text-xl text-[#c5c5c5]"
+                className="flex w-12 shrink-0 flex-col items-center border-r border-[#45413a] bg-[#1c1b19] py-2 text-xl text-[#f0e4c5]"
                 aria-label="Activity bar"
               >
                 <button
-                  className={`grid h-12 w-full place-items-center ${!isGitPanelOpen ? 'border-l-2 border-cyan-300 bg-[#373737] text-cyan-200' : 'text-[#aaaaaa] hover:bg-[#3a3a3a] hover:text-white'}`}
+                  className={`grid h-12 w-full place-items-center ${!isGitPanelOpen ? 'border-l-2 border-cyan-300 bg-[#2a2724] text-cyan-200' : 'text-[#a89984] hover:bg-[#2a2724] hover:text-white'}`}
                   title="Explorer"
                   type="button"
                   onClick={() => {
@@ -889,14 +911,14 @@ export function WorkspaceExplorer({ workspaceId }: { workspaceId: string }) {
                   ▱
                 </button>
                 <button
-                  className="grid h-12 w-full place-items-center text-[#aaaaaa] hover:bg-[#3a3a3a] hover:text-white"
+                  className="grid h-12 w-full place-items-center text-[#a89984] hover:bg-[#2a2724] hover:text-white"
                   title="Search"
                   type="button"
                 >
                   ⌕
                 </button>
                 <button
-                  className={`grid h-12 w-full place-items-center ${isGitPanelOpen ? 'border-l-2 border-cyan-300 bg-[#373737] text-cyan-200' : 'text-[#aaaaaa] hover:bg-[#3a3a3a] hover:text-white'}`}
+                  className={`grid h-12 w-full place-items-center ${isGitPanelOpen ? 'border-l-2 border-cyan-300 bg-[#2a2724] text-cyan-200' : 'text-[#a89984] hover:bg-[#2a2724] hover:text-white'}`}
                   title="Source control"
                   type="button"
                   onClick={() => {
@@ -908,21 +930,21 @@ export function WorkspaceExplorer({ workspaceId }: { workspaceId: string }) {
                   ⑂
                 </button>
                 <button
-                  className="grid h-12 w-full place-items-center text-[#aaaaaa] hover:bg-[#3a3a3a] hover:text-white"
+                  className="grid h-12 w-full place-items-center text-[#a89984] hover:bg-[#2a2724] hover:text-white"
                   title="Run and debug"
                   type="button"
                 >
                   ▷
                 </button>
                 <button
-                  className="grid h-12 w-full place-items-center text-[#aaaaaa] hover:bg-[#3a3a3a] hover:text-white"
+                  className="grid h-12 w-full place-items-center text-[#a89984] hover:bg-[#2a2724] hover:text-white"
                   title="Extensions"
                   type="button"
                 >
                   ▦
                 </button>
                 <button
-                  className="mt-auto grid h-12 w-full place-items-center text-[#aaaaaa] hover:bg-[#3a3a3a] hover:text-white"
+                  className="mt-auto grid h-12 w-full place-items-center text-[#a89984] hover:bg-[#2a2724] hover:text-white"
                   title="Team collaboration"
                   type="button"
                   onClick={() => setIsCollaborationPanelOpen((open) => !open)}
@@ -932,11 +954,11 @@ export function WorkspaceExplorer({ workspaceId }: { workspaceId: string }) {
               </nav>
 
               {isExplorerOpen && isGitPanelOpen ? (
-                <aside className="flex w-72 shrink-0 flex-col border-r border-[#333] bg-[#252526] text-[#cccccc]">
+                <aside className="flex w-72 shrink-0 flex-col border-r border-[#45413a] bg-[#232220] text-[#f0e4c5]">
                   <div className="flex h-9 shrink-0 items-center justify-between px-5 text-[11px] font-semibold uppercase tracking-wide">
                     <h2>Source Control</h2>
                     <button
-                      className="text-lg leading-none text-[#bdbdbd] hover:text-white"
+                      className="text-lg leading-none text-[#d4bd99] hover:text-white"
                       type="button"
                       title="Refresh Git status"
                       aria-label="Refresh Git status"
@@ -945,28 +967,28 @@ export function WorkspaceExplorer({ workspaceId }: { workspaceId: string }) {
                       ↻
                     </button>
                   </div>
-                  <div className="border-b border-[#333] px-4 py-3 text-xs text-[#bdbdbd]">
-                    <p className="truncate font-medium text-[#e7e7e7]">{workspace.repoFullName}</p>
+                  <div className="border-b border-[#45413a] px-4 py-3 text-xs text-[#d4bd99]">
+                    <p className="truncate font-medium text-[#fbf1c7]">{workspace.repoFullName}</p>
                     <p className="mt-1">
                       {gitStatus?.current ?? workspace.defaultBranch}
                       {gitStatus?.ahead ? ` · ↑${gitStatus.ahead}` : ''}
                       {gitStatus?.behind ? ` · ↓${gitStatus.behind}` : ''}
                     </p>
                   </div>
-                  <div className="border-b border-[#333] p-3">
+                  <div className="border-b border-[#45413a] p-3">
                     <label className="sr-only" htmlFor="commit-message">
                       Commit message
                     </label>
                     <textarea
                       id="commit-message"
-                      className="h-20 w-full resize-none rounded border border-[#4b4b4b] bg-[#1e1e1e] p-2 text-xs outline-none placeholder:text-[#777] focus:border-cyan-400"
+                      className="h-20 w-full resize-none rounded border border-[#6b655c] bg-[#1c1b19] p-2 text-xs outline-none placeholder:text-[#8e8373] focus:border-cyan-400"
                       value={commitMessage}
                       maxLength={500}
                       onChange={(event) => setCommitMessage(event.target.value)}
                       placeholder="Message (required)"
                     />
                     <button
-                      className="mt-2 w-full rounded bg-cyan-500 px-3 py-2 text-xs font-semibold text-slate-950 disabled:cursor-not-allowed disabled:bg-[#3c3c3c] disabled:text-[#888]"
+                      className="mt-2 w-full rounded bg-cyan-500 px-3 py-2 text-xs font-semibold text-slate-950 disabled:cursor-not-allowed disabled:bg-[#45413a] disabled:text-[#6b655c]"
                       type="button"
                       disabled={gitAction !== null || !commitMessage.trim()}
                       onClick={() => void performGitAction('commit')}
@@ -974,9 +996,9 @@ export function WorkspaceExplorer({ workspaceId }: { workspaceId: string }) {
                       {gitAction === 'commit' ? 'Committing…' : 'Commit all changes'}
                     </button>
                   </div>
-                  <div className="flex shrink-0 gap-2 border-b border-[#333] p-3">
+                  <div className="flex shrink-0 gap-2 border-b border-[#45413a] p-3">
                     <button
-                      className="flex-1 rounded border border-[#4b4b4b] px-2 py-2 text-xs hover:border-cyan-400 disabled:cursor-not-allowed disabled:text-[#777]"
+                      className="flex-1 rounded border border-[#6b655c] px-2 py-2 text-xs hover:border-cyan-400 disabled:cursor-not-allowed disabled:text-[#8e8373]"
                       type="button"
                       disabled={gitAction !== null}
                       onClick={() => void performGitAction('pull')}
@@ -984,7 +1006,7 @@ export function WorkspaceExplorer({ workspaceId }: { workspaceId: string }) {
                       {gitAction === 'pull' ? 'Pulling…' : 'Pull'}
                     </button>
                     <button
-                      className="flex-1 rounded border border-[#4b4b4b] px-2 py-2 text-xs hover:border-cyan-400 disabled:cursor-not-allowed disabled:text-[#777]"
+                      className="flex-1 rounded border border-[#6b655c] px-2 py-2 text-xs hover:border-cyan-400 disabled:cursor-not-allowed disabled:text-[#8e8373]"
                       type="button"
                       title={
                         workspace.role === 'OWNER'
@@ -1017,7 +1039,7 @@ export function WorkspaceExplorer({ workspaceId }: { workspaceId: string }) {
                         {gitStatus.files.map((file) => (
                           <li
                             key={file.path}
-                            className="flex items-center gap-2 rounded px-2 py-1 text-xs hover:bg-[#333333]"
+                            className="flex items-center gap-2 rounded px-2 py-1 text-xs hover:bg-[#1c1b19]"
                           >
                             <span className="w-4 text-center font-semibold text-amber-300">
                               {gitFileBadge(file)}
@@ -1029,28 +1051,28 @@ export function WorkspaceExplorer({ workspaceId }: { workspaceId: string }) {
                         ))}
                       </ul>
                     ) : (
-                      <p className="px-4 text-xs text-[#999]">No changes to commit.</p>
+                      <p className="px-4 text-xs text-[#8e8373]">No changes to commit.</p>
                     )}
                   </div>
                   {workspace.role !== 'OWNER' ? (
-                    <p className="border-t border-[#333] p-3 text-xs text-[#999]">
+                    <p className="border-t border-[#45413a] p-3 text-xs text-[#8e8373]">
                       Only the workspace owner can push to GitHub.
                     </p>
                   ) : null}
                 </aside>
               ) : isExplorerOpen ? (
-                <aside className="flex w-72 shrink-0 flex-col border-r border-[#333] bg-[#252526] text-[#cccccc]">
+                <aside className="flex w-72 shrink-0 flex-col border-r border-[#45413a] bg-[#232220] text-[#f0e4c5]">
                   <div className="flex h-9 shrink-0 items-center justify-between px-5 text-[11px] font-semibold uppercase tracking-wide">
                     <h2>Explorer</h2>
-                    <span className="text-lg leading-none text-[#bdbdbd]">···</span>
+                    <span className="text-lg leading-none text-[#d4bd99]">···</span>
                   </div>
-                  <div className="flex h-7 shrink-0 items-center gap-1 bg-[#333333] px-3 text-xs font-semibold">
+                  <div className="flex h-7 shrink-0 items-center gap-1 bg-[#1c1b19] px-3 text-xs font-semibold">
                     <span className="text-cyan-200">⌄</span>
                     <span className="truncate">{workspace.name}</span>
                   </div>
-                  <div className="flex shrink-0 gap-1 border-b border-[#333] px-3 py-2">
+                  <div className="flex shrink-0 gap-1 border-b border-[#45413a] px-3 py-2">
                     <button
-                      className="grid h-7 flex-1 place-items-center rounded border border-[#4b4b4b] text-xs hover:border-cyan-400 hover:text-cyan-200"
+                      className="grid h-7 flex-1 place-items-center rounded border border-[#6b655c] text-xs hover:border-cyan-400 hover:text-cyan-200"
                       type="button"
                       onClick={() => void createEntry('directory', null)}
                     >
@@ -1086,28 +1108,28 @@ export function WorkspaceExplorer({ workspaceId }: { workspaceId: string }) {
                       </ul>
                     )}
                   </div>
-                  <div className="shrink-0 border-t border-[#333] text-xs text-[#bdbdbd]">
-                    <p className="border-b border-[#333] px-4 py-2">› Outline</p>
-                    <p className="border-b border-[#333] px-4 py-2">› Timeline</p>
+                  <div className="shrink-0 border-t border-[#45413a] text-xs text-[#d4bd99]">
+                    <p className="border-b border-[#45413a] px-4 py-2">› Outline</p>
+                    <p className="border-b border-[#45413a] px-4 py-2">› Timeline</p>
                     <p className="px-4 py-2">› Git</p>
                   </div>
                 </aside>
               ) : null}
 
-              <section className="flex min-w-0 flex-1 flex-col overflow-hidden bg-[#1e1e1e]">
-                <div className="flex h-9 shrink-0 overflow-x-auto border-b border-[#333] bg-[#252526]">
+              <section className="flex min-w-0 flex-1 flex-col overflow-hidden bg-[#1c1b19]">
+                <div className="flex h-9 shrink-0 overflow-x-auto border-b border-[#45413a] bg-[#232220]">
                   {tabs.length === 0 ? (
-                    <p className="px-4 py-2 text-xs text-[#bdbdbd]">
+                    <p className="px-4 py-2 text-xs text-[#d4bd99]">
                       Select a file to open it in the editor.
                     </p>
                   ) : (
                     tabs.map((tab) => (
                       <div
                         key={tab.path}
-                        className={`flex h-9 shrink-0 items-center gap-2 border-r border-[#333] px-3 text-xs ${
+                        className={`flex h-9 shrink-0 items-center gap-2 border-r border-[#45413a] px-3 text-xs ${
                           tab.path === activeFilePath
-                            ? 'border-t-2 border-t-cyan-400 bg-[#1e1e1e] text-[#f0f0f0]'
-                            : 'bg-[#2d2d2d] text-[#bdbdbd] hover:bg-[#333333]'
+                            ? 'border-t-2 border-t-cyan-400 bg-[#1c1b19] text-[#fff8e8]'
+                            : 'bg-[#161412] text-[#d4bd99] hover:bg-[#1c1b19]'
                         }`}
                       >
                         <button
@@ -1135,7 +1157,7 @@ export function WorkspaceExplorer({ workspaceId }: { workspaceId: string }) {
                       key={activeTab.path}
                       height="100%"
                       language={activeTab.language}
-                      theme="vs-dark"
+                      theme="mechanoonna"
                       defaultValue={activeTab.content}
                       path={activeTab.path}
                       onMount={(editor) => {
@@ -1172,16 +1194,16 @@ export function WorkspaceExplorer({ workspaceId }: { workspaceId: string }) {
                   )}
                 </div>
                 {isBottomPanelOpen ? (
-                  <section className="h-44 shrink-0 border-t border-[#333] bg-[#181818]">
-                    <div className="flex h-9 items-center gap-5 border-b border-[#333] px-4 text-[11px] font-semibold uppercase tracking-wider text-[#bdbdbd]">
+                  <section className="h-44 shrink-0 border-t border-[#45413a] bg-[#161412]">
+                    <div className="flex h-9 items-center gap-5 border-b border-[#45413a] px-4 text-[11px] font-semibold uppercase tracking-wider text-[#d4bd99]">
                       <span>Problems</span>
                       <span>Output</span>
-                      <span className="border-b-2 border-cyan-300 py-[10px] text-[#e7e7e7]">
+                      <span className="border-b-2 border-cyan-300 py-[10px] text-[#fbf1c7]">
                         Terminal
                       </span>
                       <span>Ports</span>
                     </div>
-                    <pre className="h-[8.75rem] overflow-auto p-4 font-mono text-xs leading-6 text-[#bdbdbd]">
+                    <pre className="h-[8.75rem] overflow-auto p-4 font-mono text-xs leading-6 text-[#d4bd99]">
                       together@{workspace.name}:~${' '}
                       <span className="text-emerald-300">
                         Workspace terminal will be enabled in Phase 2.
@@ -1192,7 +1214,7 @@ export function WorkspaceExplorer({ workspaceId }: { workspaceId: string }) {
                 ) : null}
               </section>
             </div>
-            <footer className="flex h-6 shrink-0 items-center justify-between bg-[#007acc] px-3 text-[11px] text-white">
+            <footer className="flex h-6 shrink-0 items-center justify-between bg-[#d4bd99] px-3 text-[11px] text-[#1c1b19]">
               <div className="flex items-center gap-4">
                 <span>⑂ {workspace.defaultBranch}</span>
                 <span>↻</span>
@@ -1207,11 +1229,11 @@ export function WorkspaceExplorer({ workspaceId }: { workspaceId: string }) {
             </footer>
 
             {isCollaborationPanelOpen ? (
-              <aside className="absolute bottom-6 right-0 top-0 z-10 flex w-80 flex-col border-l border-[#333] bg-[#252526] shadow-2xl">
-                <div className="flex h-10 shrink-0 items-center justify-between border-b border-[#333] px-4 text-xs font-semibold uppercase tracking-wide">
+              <aside className="absolute bottom-6 right-0 top-0 z-10 flex w-80 flex-col border-l border-[#45413a] bg-[#232220] shadow-2xl">
+                <div className="flex h-10 shrink-0 items-center justify-between border-b border-[#45413a] px-4 text-xs font-semibold uppercase tracking-wide">
                   <span>Team collaboration</span>
                   <button
-                    className="text-lg text-[#bdbdbd] hover:text-white"
+                    className="text-lg text-[#d4bd99] hover:text-white"
                     type="button"
                     aria-label="Close collaboration panel"
                     onClick={() => setIsCollaborationPanelOpen(false)}
@@ -1219,9 +1241,9 @@ export function WorkspaceExplorer({ workspaceId }: { workspaceId: string }) {
                     ×
                   </button>
                 </div>
-                <div className="border-b border-[#333] px-4 py-3">
+                <div className="border-b border-[#45413a] px-4 py-3">
                   <h3 className="text-sm font-semibold">Online now ({presence.length})</h3>
-                  <div className="mt-2 space-y-2 text-xs text-[#bdbdbd]">
+                  <div className="mt-2 space-y-2 text-xs text-[#d4bd99]">
                     {presence.map((member) => (
                       <p key={member.id}>
                         {member.username}
@@ -1247,14 +1269,14 @@ export function WorkspaceExplorer({ workspaceId }: { workspaceId: string }) {
                     ))}
                   </div>
                   <textarea
-                    className="mt-3 h-20 w-full resize-none rounded border border-[#4b4b4b] bg-[#1e1e1e] p-2 text-xs outline-none focus:border-cyan-400 disabled:cursor-not-allowed disabled:opacity-60"
+                    className="mt-3 h-20 w-full resize-none rounded border border-[#6b655c] bg-[#1c1b19] p-2 text-xs outline-none focus:border-cyan-400 disabled:cursor-not-allowed disabled:opacity-60"
                     value={chatInput}
                     disabled={!isChatConnected}
                     onChange={(event) => setChatInput(event.target.value)}
                     placeholder={isChatConnected ? 'Message the team' : 'Reconnecting chat…'}
                   />
                   <button
-                    className="mt-2 self-end rounded bg-cyan-500 px-3 py-2 text-xs font-semibold text-slate-950 hover:bg-cyan-300 disabled:cursor-not-allowed disabled:bg-[#3c3c3c] disabled:text-[#888]"
+                    className="mt-2 self-end rounded bg-cyan-500 px-3 py-2 text-xs font-semibold text-slate-950 hover:bg-cyan-300 disabled:cursor-not-allowed disabled:bg-[#45413a] disabled:text-[#6b655c]"
                     type="button"
                     disabled={!isChatConnected || !chatInput.trim()}
                     onClick={sendChat}
