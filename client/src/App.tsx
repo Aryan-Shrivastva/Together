@@ -1,10 +1,13 @@
-import { useEffect, useState } from 'react';
+import { lazy, Suspense, useEffect, useState } from 'react';
 
 import { AuthProvider, useAuth } from './auth/AuthContext';
 import { ProtectedRoute } from './auth/ProtectedRoute';
 import { Dashboard } from './dashboard/Dashboard';
 import { JoinWorkspace } from './invites/JoinWorkspace';
-import { WorkspaceExplorer } from './workspace/WorkspaceExplorer';
+
+const WorkspaceExplorer = lazy(async () => ({
+  default: (await import('./workspace/WorkspaceExplorer')).WorkspaceExplorer,
+}));
 
 type HealthState = 'checking' | 'available' | 'unavailable';
 
@@ -27,6 +30,16 @@ function LoginScreen({ health }: { health: HealthState }) {
       <p className="mt-6 text-sm" aria-live="polite">
         Backend health: <span className="font-semibold">{health}</span>
       </p>
+    </section>
+  );
+}
+
+function WorkspaceLoadingScreen() {
+  return (
+    <section className="mx-auto max-w-3xl rounded-xl border border-slate-800 bg-slate-900 p-8 shadow-2xl">
+      <p className="text-sm font-semibold uppercase tracking-[0.2em] text-cyan-400">Together</p>
+      <h1 className="mt-3 text-2xl font-bold">Opening workspace…</h1>
+      <p className="mt-3 text-slate-300">Loading the editor and collaboration tools.</p>
     </section>
   );
 }
@@ -61,7 +74,9 @@ function AuthenticatedApp() {
         {joinToken ? (
           <JoinWorkspace token={joinToken} />
         ) : workspaceId ? (
-          <WorkspaceExplorer workspaceId={workspaceId} />
+          <Suspense fallback={<WorkspaceLoadingScreen />}>
+            <WorkspaceExplorer workspaceId={workspaceId} />
+          </Suspense>
         ) : (
           <Dashboard />
         )}

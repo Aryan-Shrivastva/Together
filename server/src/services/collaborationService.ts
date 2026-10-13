@@ -5,6 +5,7 @@ import { dirname, resolve } from 'node:path';
 import type * as Y from 'yjs';
 
 import { env } from '../config/env.js';
+import { HttpError } from '../errors/httpError.js';
 import { fileService } from './fileService.js';
 import { workspaceService } from './workspaceService.js';
 
@@ -12,6 +13,8 @@ type DocumentTarget = {
   workspaceId: string;
   path: string;
 };
+
+type PersistenceFailureListener = (target: DocumentTarget) => void;
 
 type ActiveDocument = {
   target: DocumentTarget;
@@ -26,7 +29,12 @@ type SharedDocument = Y.Doc & {
 };
 
 const require = createRequire(import.meta.url);
-const yWebsocketUtilitiesPath = resolve(dirname(require.resolve('y-websocket')), '..', 'bin', 'utils.js');
+const yWebsocketUtilitiesPath = resolve(
+  dirname(require.resolve('y-websocket')),
+  '..',
+  'bin',
+  'utils.js',
+);
 const yWebsocketUtils = require(yWebsocketUtilitiesPath) as {
   docs: Map<string, SharedDocument>;
   getYDoc: (documentName: string) => SharedDocument;
@@ -35,6 +43,11 @@ const { docs } = yWebsocketUtils;
 
 export class CollaborationService {
   private readonly activeDocuments = new Map<string, ActiveDocument>();
+  private persistenceFailureListener: PersistenceFailureListener | undefined;
+
+  setPersistenceFailureListener(listener: PersistenceFailureListener | undefined): void {
+    this.persistenceFailureListener = listener;
+  }
 
   documentName(target: DocumentTarget): string {
     return `${target.workspaceId}:${encodeURIComponent(target.path)}`;
@@ -69,7 +82,9 @@ export class CollaborationService {
         return;
       }
 
-      void this.flushDocument(documentName).finally(() => this.disposeDocument(documentName));
+      void this.flushDocument(documentName)
+        .catch(() => this.logPersistenceFailure(documentName))
+        .finally(() => this.disposeDocument(documentName));
     }, env.COLLABORATION_DOC_UNLOAD_MS);
   }
 
@@ -82,7 +97,47 @@ export class CollaborationService {
   }
 
   async flushAll(): Promise<void> {
-    await Promise.all([...this.activeDocuments.keys()].map((documentName) => this.flushDocument(documentName)));
+    const documentNames = [...this.activeDocuments.keys()];
+    const results = await Promise.allSettled(
+      documentNames.map((documentName) => this.flushDocument(documentName)),
+    );
+
+    results.forEach((result, index) => {
+      const documentName = documentNames[index];
+      if (result.status === 'rejected' && documentName) {
+        this.logPersistenceFailure(documentName);
+      }
+    });
+  }
+
+  async flushWorkspace(workspaceId: string): Promise<void> {
+    const documentNames = [...this.activeDocuments.entries()]
+      .filter(([, active]) => active.target.workspaceId === workspaceId)
+      .map(([documentName]) => documentName);
+    const results = await Promise.allSettled(
+      documentNames.map((documentName) => this.flushDocument(documentName)),
+    );
+
+    if (results.some((result) => result.status === 'rejected')) {
+      results.forEach((result, index) => {
+        const documentName = documentNames[index];
+        if (result.status === 'rejected' && documentName) {
+          this.logPersistenceFailure(documentName);
+        }
+      });
+      throw new HttpError(
+        503,
+        'Collaborative edits could not be saved to the workspace. Try again before using Git.',
+      );
+    }
+  }
+
+  async reloadWorkspace(workspaceId: string): Promise<void> {
+    await Promise.all(
+      [...this.activeDocuments.entries()]
+        .filter(([, active]) => active.target.workspaceId === workspaceId)
+        .map(([documentName]) => this.reloadFromDisk(documentName)),
+    );
   }
 
   async prepareDocument(documentName: string): Promise<void> {
@@ -126,7 +181,7 @@ export class CollaborationService {
     }
     active.persistTimer = setTimeout(() => {
       active.persistTimer = undefined;
-      void this.flushDocument(documentName);
+      void this.flushDocument(documentName).catch(() => this.logPersistenceFailure(documentName));
     }, env.COLLABORATION_PERSIST_DEBOUNCE_MS);
   }
 
@@ -138,7 +193,10 @@ export class CollaborationService {
     }
 
     try {
-      const diskFile = await fileService.readTextFile(active.target.workspaceId, active.target.path);
+      const diskFile = await fileService.readTextFile(
+        active.target.workspaceId,
+        active.target.path,
+      );
       const sharedText = document.getText('content');
       if (sharedText.toString() !== diskFile.content) {
         document.transact(() => {
@@ -146,7 +204,14 @@ export class CollaborationService {
           sharedText.insert(0, diskFile.content);
         }, 'disk-reload');
       }
-    } catch {
+    } catch (error) {
+      if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) {
+        const target = active.target;
+        console.error('Failed to reload a collaborative document from disk.', {
+          workspaceId: target.workspaceId,
+          path: target.path,
+        });
+      }
       // A deleted or moved file is handled by the file API; keep the in-memory document intact.
     }
   }
@@ -158,14 +223,21 @@ export class CollaborationService {
       return;
     }
 
-    try {
-      await fileService.writeTextFile(
-        active.target.workspaceId,
-        active.target.path,
-        document.getText('content').toString(),
-      );
-    } catch {
-      console.error('Failed to persist a collaborative document.');
+    await fileService.writeTextFile(
+      active.target.workspaceId,
+      active.target.path,
+      document.getText('content').toString(),
+    );
+  }
+
+  private logPersistenceFailure(documentName: string): void {
+    const target = this.parseDocumentName(documentName);
+    console.error(
+      'Failed to persist a collaborative document.',
+      target ? { workspaceId: target.workspaceId, path: target.path } : undefined,
+    );
+    if (target) {
+      this.persistenceFailureListener?.(target);
     }
   }
 

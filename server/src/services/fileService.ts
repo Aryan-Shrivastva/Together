@@ -72,7 +72,10 @@ export class FileService {
     }
   }
 
-  async readTextFile(workspaceId: string, path: string): Promise<{ path: string; content: string }> {
+  async readTextFile(
+    workspaceId: string,
+    path: string,
+  ): Promise<{ path: string; content: string }> {
     const absolutePath = await workspaceService.resolveFilePath(workspaceId, path);
     const details = await this.getExistingFileDetails(absolutePath);
 

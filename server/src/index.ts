@@ -2,20 +2,47 @@ import cookieParser from 'cookie-parser';
 import cors from 'cors';
 import express from 'express';
 import { createServer } from 'node:http';
+import { ZodError } from 'zod';
 
 import { requireAuthentication } from './auth/middleware.js';
 import { authRouter } from './auth/routes.js';
 import { AuthenticationConfigurationError, env } from './config/env.js';
 import { prisma } from './db/client.js';
 import { HttpError } from './errors/httpError.js';
+import { authRateLimit } from './middleware/rateLimit.js';
 import { inviteRouter } from './routes/invites.js';
 import { chatRouter } from './routes/chat.js';
+import { gitRouter } from './routes/git.js';
 import { fileRouter } from './routes/files.js';
 import { workspaceRouter } from './routes/workspaces.js';
 import { collaborationService } from './services/collaborationService.js';
-import { initializeCollaborationSockets, initializeWorkspaceSockets } from './sockets/workspaceSockets.js';
+import {
+  initializeCollaborationSockets,
+  initializeWorkspaceSockets,
+} from './sockets/workspaceSockets.js';
 
 const app = express();
+
+function isHttpError(error: unknown): error is HttpError {
+  if (error instanceof HttpError) {
+    return true;
+  }
+
+  // The development server reloads TypeScript modules in place. During a
+  // reload, an error can have been created by the previous HttpError class
+  // instance, making `instanceof` unreliable even though it is a safe,
+  // application-created HTTP error.
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    'statusCode' in error &&
+    typeof error.statusCode === 'number' &&
+    error.statusCode >= 400 &&
+    error.statusCode <= 599 &&
+    'message' in error &&
+    typeof error.message === 'string'
+  );
+}
 
 app.use(
   cors({
@@ -30,12 +57,13 @@ app.get('/health', (_request, response) => {
   response.status(200).json({ status: 'ok' });
 });
 
-app.use('/auth', authRouter);
+app.use('/auth', authRateLimit, authRouter);
 
 app.use('/api', requireAuthentication);
 app.use('/api', workspaceRouter);
 app.use('/api', inviteRouter);
 app.use('/api', chatRouter);
+app.use('/api', gitRouter);
 app.use('/api', fileRouter);
 app.get('/api/me', async (request, response, next) => {
   try {
@@ -72,7 +100,7 @@ app.get('/api/me', async (request, response, next) => {
 app.use(
   (
     error: unknown,
-    _request: express.Request,
+    request: express.Request,
     response: express.Response,
     _next: express.NextFunction,
   ) => {
@@ -83,12 +111,27 @@ app.use(
       return;
     }
 
-    if (error instanceof HttpError) {
+    if (isHttpError(error)) {
       response.status(error.statusCode).json({ error: error.message });
       return;
     }
 
-    console.error('Request failed.');
+    if (error instanceof ZodError) {
+      response.status(400).json({ error: 'The submitted data is invalid.' });
+      return;
+    }
+
+    // Keep diagnostics useful without echoing error messages, which may include
+    // credentials from an upstream Git operation.
+    console.error('Request failed.', {
+      method: request.method,
+      path: request.path,
+      name: error instanceof Error ? error.name : typeof error,
+      code:
+        error && typeof error === 'object' && 'code' in error && typeof error.code === 'string'
+          ? error.code
+          : undefined,
+    });
     response.status(500).json({ error: 'An unexpected server error occurred.' });
   },
 );

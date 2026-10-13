@@ -13,13 +13,24 @@ import { prisma } from '../db/client.js';
 import { collaborationService } from '../services/collaborationService.js';
 import { fileService } from '../services/fileService.js';
 import { membershipService } from '../services/membershipService.js';
+import { SlidingWindowRateLimiter } from '../middleware/rateLimit.js';
 
 const workspaceIdSchema = z.string().uuid();
+const chatMessageRateLimiter = new SlidingWindowRateLimiter(60 * 1_000, 30);
 let socketServer: Server | undefined;
 const require = createRequire(import.meta.url);
-const yWebsocketUtilitiesPath = resolve(dirname(require.resolve('y-websocket')), '..', 'bin', 'utils.js');
+const yWebsocketUtilitiesPath = resolve(
+  dirname(require.resolve('y-websocket')),
+  '..',
+  'bin',
+  'utils.js',
+);
 const { setupWSConnection } = require(yWebsocketUtilitiesPath) as {
-  setupWSConnection: (connection: import('ws').WebSocket, request: import('node:http').IncomingMessage, options: { docName: string }) => void;
+  setupWSConnection: (
+    connection: import('ws').WebSocket,
+    request: import('node:http').IncomingMessage,
+    options: { docName: string },
+  ) => void;
 };
 
 function workspaceRoom(workspaceId: string): string {
@@ -28,17 +39,30 @@ function workspaceRoom(workspaceId: string): string {
 
 async function emitPresence(workspaceId: string): Promise<void> {
   const sockets = await socketServer?.in(workspaceRoom(workspaceId)).fetchSockets();
-  const users = new Map<string, { id: string; username: string; avatarUrl: string; filePath: string | null }>();
+  const users = new Map<
+    string,
+    { id: string; username: string; avatarUrl: string; filePath: string | null }
+  >();
   for (const socket of sockets ?? []) {
-    const user = socket.data.user as { id: string; username: string; avatarUrl: string } | undefined;
-    if (user) users.set(user.id, { ...user, filePath: (socket.data.filePath as string | null | undefined) ?? null });
+    const user = socket.data.user as
+      { id: string; username: string; avatarUrl: string } | undefined;
+    if (user)
+      users.set(user.id, {
+        ...user,
+        filePath: (socket.data.filePath as string | null | undefined) ?? null,
+      });
   }
-  socketServer?.to(workspaceRoom(workspaceId)).emit('presence:update', { users: [...users.values()] });
+  socketServer
+    ?.to(workspaceRoom(workspaceId))
+    .emit('presence:update', { users: [...users.values()] });
 }
 
 function getCookieValue(cookieHeader: string, name: string): string | undefined {
   const prefix = `${name}=`;
-  const matchingCookie = cookieHeader.split(';').map((value) => value.trim()).find((value) => value.startsWith(prefix));
+  const matchingCookie = cookieHeader
+    .split(';')
+    .map((value) => value.trim())
+    .find((value) => value.startsWith(prefix));
 
   if (!matchingCookie) {
     return undefined;
@@ -58,6 +82,11 @@ export function initializeWorkspaceSockets(httpServer: HttpServer): Server {
       credentials: true,
     },
   });
+  collaborationService.setPersistenceFailureListener((target) => {
+    socketServer?.to(workspaceRoom(target.workspaceId)).emit('collaboration:error', {
+      error: `Unable to save ${target.path}. Editing is paused until saving recovers.`,
+    });
+  });
 
   socketServer.use(async (socket, next) => {
     try {
@@ -74,7 +103,10 @@ export function initializeWorkspaceSockets(httpServer: HttpServer): Server {
 
       const user = verifySessionToken(sessionToken);
       await membershipService.requireMember(workspaceId, user.sub);
-      const databaseUser = await prisma.user.findUnique({ where: { id: user.sub }, select: { id: true, username: true, avatarUrl: true } });
+      const databaseUser = await prisma.user.findUnique({
+        where: { id: user.sub },
+        select: { id: true, username: true, avatarUrl: true },
+      });
       if (!databaseUser) throw new Error('User no longer exists.');
       socket.data.workspaceId = workspaceId;
       socket.data.user = databaseUser;
@@ -89,7 +121,9 @@ export function initializeWorkspaceSockets(httpServer: HttpServer): Server {
     const workspaceId = socket.data.workspaceId as string;
     void emitPresence(workspaceId);
     socket.on('presence:update', (payload: unknown) => {
-      const result = z.object({ filePath: z.string().min(1).max(1024).nullable() }).safeParse(payload);
+      const result = z
+        .object({ filePath: z.string().min(1).max(1024).nullable() })
+        .safeParse(payload);
       if (result.success) socket.data.filePath = result.data.filePath;
       void emitPresence(workspaceId);
     });
@@ -97,8 +131,23 @@ export function initializeWorkspaceSockets(httpServer: HttpServer): Server {
       const result = z.object({ content: z.string().trim().min(1).max(5_000) }).safeParse(payload);
       if (!result.success) return;
       const user = socket.data.user as { id: string };
-      const message = await prisma.chatMessage.create({ data: { workspaceId, userId: user.id, content: result.data.content }, include: { user: { select: { id: true, username: true, avatarUrl: true } } } });
-      socketServer?.to(workspaceRoom(workspaceId)).emit('chat:message', { id: message.id, content: message.content, createdAt: message.createdAt, user: message.user });
+      const rateLimit = chatMessageRateLimiter.check(`${workspaceId}:${user.id}`);
+      if (!rateLimit.allowed) {
+        socket.emit('chat:error', {
+          error: `You are sending messages too quickly. Try again in ${rateLimit.retryAfterSeconds} seconds.`,
+        });
+        return;
+      }
+      const message = await prisma.chatMessage.create({
+        data: { workspaceId, userId: user.id, content: result.data.content },
+        include: { user: { select: { id: true, username: true, avatarUrl: true } } },
+      });
+      socketServer?.to(workspaceRoom(workspaceId)).emit('chat:message', {
+        id: message.id,
+        content: message.content,
+        createdAt: message.createdAt,
+        user: message.user,
+      });
     });
     socket.on('disconnect', () => void emitPresence(workspaceId));
   });
@@ -129,10 +178,7 @@ export function initializeCollaborationSockets(httpServer: HttpServer): void {
 
     void (async () => {
       try {
-        const sessionToken = getCookieValue(
-          request.headers.cookie ?? '',
-          getSessionCookieName(),
-        );
+        const sessionToken = getCookieValue(request.headers.cookie ?? '', getSessionCookieName());
         if (!sessionToken) {
           throw new Error('Authentication is required.');
         }

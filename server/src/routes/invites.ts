@@ -6,6 +6,7 @@ import { z } from 'zod';
 import { env } from '../config/env.js';
 import { prisma } from '../db/client.js';
 import { HttpError } from '../errors/httpError.js';
+import { inviteRateLimit } from '../middleware/rateLimit.js';
 import { membershipService } from '../services/membershipService.js';
 
 const workspaceIdSchema = z.string().uuid();
@@ -26,6 +27,7 @@ function toInviteResponse(invite: { id: string; token: string; expiresAt: Date }
 }
 
 export const inviteRouter = Router();
+inviteRouter.use(inviteRateLimit);
 
 inviteRouter.post('/workspaces/:workspaceId/invites', async (request, response, next) => {
   try {

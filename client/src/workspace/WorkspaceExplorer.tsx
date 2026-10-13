@@ -16,6 +16,7 @@ type Workspace = {
   repoFullName: string;
   defaultBranch: string;
   status: 'CLONING' | 'READY' | 'ERROR';
+  role: 'OWNER' | 'COLLABORATOR';
 };
 
 type FileTreeNode = {
@@ -37,7 +38,23 @@ type OpenFile = {
   language: string;
 };
 type PresenceUser = { id: string; username: string; avatarUrl: string; filePath: string | null };
-type ChatMessage = { id: string; content: string; createdAt: string; user: { id: string; username: string; avatarUrl: string } };
+type ChatMessage = {
+  id: string;
+  content: string;
+  createdAt: string;
+  user: { id: string; username: string; avatarUrl: string };
+};
+type GitFileStatus = { path: string; index: string; workingDirectory: string };
+type GitStatus = {
+  current: string | null;
+  tracking: string | null;
+  ahead: number;
+  behind: number;
+  files: GitFileStatus[];
+};
+type GitStatusResponse = Omit<GitStatus, 'files'> & {
+  files: Array<{ path: string; index: string; working_dir: string }>;
+};
 
 function getErrorMessage(payload: unknown): string {
   if (
@@ -76,8 +93,54 @@ function isWorkspace(value: unknown): value is Workspace {
     'defaultBranch' in value &&
     typeof value.defaultBranch === 'string' &&
     'status' in value &&
-    (value.status === 'CLONING' || value.status === 'READY' || value.status === 'ERROR')
+    (value.status === 'CLONING' || value.status === 'READY' || value.status === 'ERROR') &&
+    'role' in value &&
+    (value.role === 'OWNER' || value.role === 'COLLABORATOR')
   );
+}
+
+function isGitStatus(value: unknown): value is GitStatusResponse {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    'current' in value &&
+    (typeof value.current === 'string' || value.current === null) &&
+    'tracking' in value &&
+    (typeof value.tracking === 'string' || value.tracking === null) &&
+    'ahead' in value &&
+    typeof value.ahead === 'number' &&
+    'behind' in value &&
+    typeof value.behind === 'number' &&
+    'files' in value &&
+    Array.isArray(value.files) &&
+    value.files.every(
+      (file) =>
+        typeof file === 'object' &&
+        file !== null &&
+        'path' in file &&
+        typeof file.path === 'string' &&
+        'index' in file &&
+        typeof file.index === 'string' &&
+        'working_dir' in file &&
+        typeof file.working_dir === 'string',
+    )
+  );
+}
+
+function toGitFileStatus(file: {
+  path: string;
+  index: string;
+  working_dir: string;
+}): GitFileStatus {
+  return { path: file.path, index: file.index, workingDirectory: file.working_dir };
+}
+
+function gitFileBadge(file: GitFileStatus): string {
+  if (file.index === '?' || file.workingDirectory === '?') return 'U';
+  if (file.index === 'D' || file.workingDirectory === 'D') return 'D';
+  if (file.index === 'A' || file.workingDirectory === 'A') return 'A';
+  if (file.index === 'R' || file.workingDirectory === 'R') return 'R';
+  return 'M';
 }
 
 function isFileTreeNode(value: unknown): value is FileTreeNode {
@@ -243,12 +306,27 @@ export function WorkspaceExplorer({ workspaceId }: { workspaceId: string }) {
   const [error, setError] = useState<string | null>(null);
   const [liveUpdateError, setLiveUpdateError] = useState<string | null>(null);
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
-  const [editorInstance, setEditorInstance] = useState<monaco.editor.IStandaloneCodeEditor | null>(null);
+  const [editorInstance, setEditorInstance] = useState<monaco.editor.IStandaloneCodeEditor | null>(
+    null,
+  );
   const [editorPath, setEditorPath] = useState<string | null>(null);
-  const [collaborationStatus, setCollaborationStatus] = useState('Connect to a file to collaborate.');
+  const [collaborationStatus, setCollaborationStatus] = useState(
+    'Connect to a file to collaborate.',
+  );
   const [presence, setPresence] = useState<PresenceUser[]>([]);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [chatInput, setChatInput] = useState('');
+  const [chatError, setChatError] = useState<string | null>(null);
+  const [isChatConnected, setIsChatConnected] = useState(false);
+  const [isExplorerOpen, setIsExplorerOpen] = useState(true);
+  const [isGitPanelOpen, setIsGitPanelOpen] = useState(false);
+  const [isBottomPanelOpen, setIsBottomPanelOpen] = useState(true);
+  const [isCollaborationPanelOpen, setIsCollaborationPanelOpen] = useState(false);
+  const [gitStatus, setGitStatus] = useState<GitStatus | null>(null);
+  const [gitAction, setGitAction] = useState<'commit' | 'pull' | 'push' | null>(null);
+  const [gitError, setGitError] = useState<string | null>(null);
+  const [gitNotice, setGitNotice] = useState<string | null>(null);
+  const [commitMessage, setCommitMessage] = useState('');
   const presenceSocketRef = useRef<ReturnType<typeof io> | null>(null);
 
   const loadTree = useCallback(async () => {
@@ -263,6 +341,30 @@ export function WorkspaceExplorer({ workspaceId }: { workspaceId: string }) {
     }
 
     setTree(payload.tree.filter(isFileTreeNode));
+  }, [workspaceId]);
+
+  const loadGitStatus = useCallback(async () => {
+    try {
+      const payload = await requestJson(`/api/workspaces/${workspaceId}/git/status`);
+      if (
+        typeof payload !== 'object' ||
+        payload === null ||
+        !('status' in payload) ||
+        !isGitStatus(payload.status)
+      ) {
+        throw new Error('The Git status response was invalid.');
+      }
+
+      setGitStatus({
+        ...payload.status,
+        files: payload.status.files.map(toGitFileStatus),
+      });
+      setGitError(null);
+    } catch (requestError) {
+      setGitError(
+        requestError instanceof Error ? requestError.message : 'Unable to load Git status.',
+      );
+    }
   }, [workspaceId]);
 
   useEffect(() => {
@@ -291,7 +393,11 @@ export function WorkspaceExplorer({ workspaceId }: { workspaceId: string }) {
         }
       } catch (requestError) {
         if (isCurrent) {
-          setError(requestError instanceof Error ? requestError.message : 'Unable to load workspace files.');
+          setError(
+            requestError instanceof Error
+              ? requestError.message
+              : 'Unable to load workspace files.',
+          );
         }
       } finally {
         if (isCurrent) {
@@ -320,19 +426,30 @@ export function WorkspaceExplorer({ workspaceId }: { workspaceId: string }) {
     socket.on('fs:changed', () => {
       void loadTree().catch((requestError: unknown) => {
         setLiveUpdateError(
-          requestError instanceof Error ? requestError.message : 'Unable to refresh workspace files.',
+          requestError instanceof Error
+            ? requestError.message
+            : 'Unable to refresh workspace files.',
         );
       });
     });
     socket.on('connect', () => setLiveUpdateError(null));
+    socket.on('disconnect', () => {
+      setLiveUpdateError('Reconnecting to live file updates…');
+    });
     socket.on('connect_error', () => {
-      setLiveUpdateError('Live file updates are temporarily unavailable.');
+      setLiveUpdateError('Reconnecting to live file updates…');
     });
 
     return () => {
       socket.disconnect();
     };
   }, [loadTree, workspace?.status, workspaceId]);
+
+  useEffect(() => {
+    if (workspace?.status === 'READY' && isGitPanelOpen) {
+      void loadGitStatus();
+    }
+  }, [isGitPanelOpen, loadGitStatus, workspace?.status]);
 
   useEffect(() => {
     if (!activeFilePath || activeFilePath !== editorPath || !editorInstance || !user) {
@@ -367,9 +484,17 @@ export function WorkspaceExplorer({ workspaceId }: { workspaceId: string }) {
       setCollaborationStatus('Live collaboration connected.');
     };
     const connectionError = () => setCollaborationStatus('Collaboration connection failed.');
+    const connectionStatus = (event: { status: 'connected' | 'disconnected' }) => {
+      if (event.status === 'disconnected') {
+        setCollaborationStatus('Reconnecting collaboration…');
+      } else if (binding) {
+        setCollaborationStatus('Live collaboration connected.');
+      }
+    };
 
     provider.on('sync', synchronize);
     provider.on('connection-error', connectionError);
+    provider.on('status', connectionStatus);
 
     return () => {
       binding?.destroy();
@@ -383,12 +508,65 @@ export function WorkspaceExplorer({ workspaceId }: { workspaceId: string }) {
     if (workspace?.status !== 'READY') return undefined;
     const socket = io({ auth: { workspaceId }, withCredentials: true });
     presenceSocketRef.current = socket;
-    socket.on('presence:update', (payload: { users?: PresenceUser[] }) => setPresence(payload.users ?? []));
-    socket.on('chat:message', (message: ChatMessage) => setMessages((current) => [...current, message]));
-    void requestJson(`/api/workspaces/${workspaceId}/messages`).then((payload) => {
-      if (typeof payload === 'object' && payload !== null && 'messages' in payload && Array.isArray(payload.messages)) setMessages(payload.messages as ChatMessage[]);
+    socket.on('connect', () => {
+      setIsChatConnected(true);
+      setChatError(null);
     });
-    return () => { presenceSocketRef.current = null; socket.disconnect(); };
+    socket.on('disconnect', () => {
+      setIsChatConnected(false);
+      setChatError('Reconnecting team chat…');
+    });
+    socket.on('connect_error', () => {
+      setIsChatConnected(false);
+      setChatError('Reconnecting team chat…');
+    });
+    socket.on('presence:update', (payload: { users?: PresenceUser[] }) =>
+      setPresence(payload.users ?? []),
+    );
+    socket.on('chat:message', (message: ChatMessage) =>
+      setMessages((current) => [...current, message]),
+    );
+    socket.on('chat:error', (payload: unknown) => {
+      if (
+        typeof payload === 'object' &&
+        payload !== null &&
+        'error' in payload &&
+        typeof payload.error === 'string'
+      ) {
+        setChatError(payload.error);
+      }
+    });
+    socket.on('collaboration:error', (payload: unknown) => {
+      if (
+        typeof payload === 'object' &&
+        payload !== null &&
+        'error' in payload &&
+        typeof payload.error === 'string'
+      ) {
+        setCollaborationStatus(payload.error);
+      }
+    });
+    void requestJson(`/api/workspaces/${workspaceId}/messages`)
+      .then((payload) => {
+        if (
+          typeof payload === 'object' &&
+          payload !== null &&
+          'messages' in payload &&
+          Array.isArray(payload.messages)
+        ) {
+          setMessages(payload.messages as ChatMessage[]);
+        }
+      })
+      .catch((requestError: unknown) => {
+        setChatError(
+          requestError instanceof Error ? requestError.message : 'Unable to load chat history.',
+        );
+      });
+    return () => {
+      presenceSocketRef.current = null;
+      setIsChatConnected(false);
+      socket.disconnect();
+    };
   }, [workspace?.status, workspaceId]);
 
   useEffect(() => {
@@ -397,9 +575,50 @@ export function WorkspaceExplorer({ workspaceId }: { workspaceId: string }) {
 
   function sendChat() {
     const content = chatInput.trim();
-    if (!content) return;
+    if (!content || !isChatConnected) {
+      if (!isChatConnected) {
+        setChatError('Team chat is reconnecting. Please wait a moment.');
+      }
+      return;
+    }
     presenceSocketRef.current?.emit('chat:send', { content });
     setChatInput('');
+  }
+
+  async function performGitAction(action: 'commit' | 'pull' | 'push') {
+    if (action === 'commit' && !commitMessage.trim()) {
+      setGitError('Enter a commit message first.');
+      return;
+    }
+
+    setGitAction(action);
+    setGitError(null);
+    setGitNotice(null);
+
+    try {
+      if (action === 'commit') {
+        await requestJson(`/api/workspaces/${workspaceId}/git/commit`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message: commitMessage.trim() }),
+        });
+        setCommitMessage('');
+        setGitNotice('Commit created in the shared workspace.');
+      } else {
+        await requestJson(`/api/workspaces/${workspaceId}/git/${action}`, { method: 'POST' });
+        setGitNotice(
+          action === 'pull'
+            ? 'Pulled the latest changes from GitHub.'
+            : 'Pushed the current branch to GitHub.',
+        );
+      }
+
+      await Promise.all([loadGitStatus(), loadTree()]);
+    } catch (requestError) {
+      setGitError(requestError instanceof Error ? requestError.message : `Git ${action} failed.`);
+    } finally {
+      setGitAction(null);
+    }
   }
 
   const displayedTree = useMemo(() => tree, [tree]);
@@ -530,9 +749,12 @@ export function WorkspaceExplorer({ workspaceId }: { workspaceId: string }) {
     }
 
     try {
-      await requestJson(`/api/workspaces/${workspaceId}/file?path=${encodeURIComponent(node.path)}`, {
-        method: 'DELETE',
-      });
+      await requestJson(
+        `/api/workspaces/${workspaceId}/file?path=${encodeURIComponent(node.path)}`,
+        {
+          method: 'DELETE',
+        },
+      );
       setTabs((currentTabs) =>
         currentTabs.filter(
           (tab) => tab.path !== node.path && !tab.path.startsWith(`${node.path}/`),
@@ -558,26 +780,89 @@ export function WorkspaceExplorer({ workspaceId }: { workspaceId: string }) {
   }
 
   return (
-    <main className="min-h-screen bg-slate-950 px-6 py-10 text-slate-100" onClick={() => setContextMenu(null)}>
-      <section className="mx-auto max-w-6xl">
-        <header className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-800 pb-6">
-          <div>
-            <p className="text-sm font-semibold uppercase tracking-[0.2em] text-cyan-400">Together</p>
-            <h1 className="mt-2 text-3xl font-bold">{workspace?.name ?? 'Workspace files'}</h1>
-            {workspace ? (
-              <p className="mt-2 text-sm text-slate-400">
-                {workspace.repoFullName} · {workspace.defaultBranch}
-              </p>
-            ) : null}
+    <main
+      className="h-screen overflow-hidden bg-[#181818] text-slate-100"
+      onClick={() => setContextMenu(null)}
+    >
+      <section className="flex h-full min-w-0 flex-col">
+        <header className="flex h-9 shrink-0 items-center border-b border-[#171717] bg-[#252526] px-3 text-xs text-[#cccccc]">
+          <div className="flex min-w-0 items-center gap-4">
+            <span
+              className="grid h-5 w-5 place-items-center text-base text-cyan-300"
+              aria-label="Together"
+            >
+              ◇
+            </span>
+            <nav className="hidden items-center gap-4 md:flex" aria-label="Application menu">
+              <span>File</span>
+              <span>Edit</span>
+              <span>Selection</span>
+              <span>View</span>
+              <span>Go</span>
+              <span>Run</span>
+              <span>Terminal</span>
+              <span>Help</span>
+            </nav>
           </div>
-          <button className="text-sm text-cyan-300 hover:text-cyan-200" type="button" onClick={returnToDashboard}>
-            ← All workspaces
-          </button>
+          <p className="mx-auto max-w-[45%] truncate rounded border border-[#3c3c3c] bg-[#1e1e1e] px-3 py-1 text-center text-[#bdbdbd]">
+            {workspace?.name ?? 'Together'}
+          </p>
+          <div className="ml-auto flex shrink-0 items-center gap-1">
+            <button
+              className={`grid h-7 w-7 place-items-center rounded text-base hover:bg-[#3c3c3c] hover:text-white ${isExplorerOpen ? 'text-cyan-200' : 'text-[#aaaaaa]'}`}
+              title="Toggle Explorer"
+              type="button"
+              aria-label="Toggle Explorer"
+              onClick={() => setIsExplorerOpen((open) => !open)}
+            >
+              ▯
+            </button>
+            <button
+              className={`grid h-7 w-7 place-items-center rounded text-base hover:bg-[#3c3c3c] hover:text-white ${isBottomPanelOpen ? 'text-cyan-200' : 'text-[#aaaaaa]'}`}
+              title="Toggle bottom panel"
+              type="button"
+              aria-label="Toggle bottom panel"
+              onClick={() => setIsBottomPanelOpen((open) => !open)}
+            >
+              ▰
+            </button>
+            <button
+              className={`grid h-7 w-7 place-items-center rounded text-base hover:bg-[#3c3c3c] hover:text-white ${isCollaborationPanelOpen ? 'bg-[#3c3c3c] text-cyan-200' : 'text-[#aaaaaa]'}`}
+              title="Open team chat"
+              type="button"
+              aria-label="Open team chat"
+              onClick={() => setIsCollaborationPanelOpen((open) => !open)}
+            >
+              ▯
+            </button>
+            <button
+              className="ml-2 text-cyan-300 hover:text-cyan-100"
+              type="button"
+              onClick={returnToDashboard}
+            >
+              Workspaces
+            </button>
+          </div>
         </header>
 
-        {error ? <p className="mt-5 text-sm text-rose-300">{error}</p> : null}
-        {liveUpdateError ? <p className="mt-3 text-sm text-amber-300">{liveUpdateError}</p> : null}
-        {isLoading ? <p className="mt-10 text-slate-400">Loading workspace files…</p> : null}
+        {error ? (
+          <p className="absolute left-1/2 top-12 z-20 -translate-x-1/2 rounded border border-rose-500/50 bg-[#2a1518] px-4 py-2 text-sm text-rose-200 shadow-xl">
+            {error}
+          </p>
+        ) : null}
+        {liveUpdateError ? (
+          <p className="absolute left-1/2 top-12 z-20 -translate-x-1/2 rounded border border-amber-500/50 bg-[#2a2115] px-4 py-2 text-sm text-amber-200 shadow-xl">
+            {liveUpdateError}
+          </p>
+        ) : null}
+        {collaborationStatus === 'Reconnecting collaboration…' ? (
+          <p className="absolute left-1/2 top-24 z-20 -translate-x-1/2 rounded border border-amber-500/50 bg-[#2a2115] px-4 py-2 text-sm text-amber-200 shadow-xl">
+            Reconnecting collaboration. Editing is temporarily paused.
+          </p>
+        ) : null}
+        {isLoading ? (
+          <p className="m-auto text-sm text-slate-400">Loading workspace files…</p>
+        ) : null}
 
         {!isLoading && workspace?.status !== 'READY' ? (
           <p className="mt-10 rounded-lg border border-slate-700 bg-slate-900 p-6 text-slate-300">
@@ -586,147 +871,399 @@ export function WorkspaceExplorer({ workspaceId }: { workspaceId: string }) {
         ) : null}
 
         {!isLoading && workspace?.status === 'READY' ? (
-          <section className="mt-8 grid min-h-[34rem] gap-4 lg:grid-cols-[minmax(15rem,20rem)_minmax(0,1fr)_15rem]">
-            <aside className="min-h-0 overflow-auto rounded-xl border border-slate-800 bg-slate-900 shadow-xl">
-              <div className="border-b border-slate-800 p-4">
-                <h2 className="font-semibold">Files</h2>
-                <p className="mt-1 text-xs text-slate-400">Right-click an item to create, rename, or delete.</p>
-                <div className="mt-3 flex gap-2">
-                  <button
-                    className="rounded-md border border-slate-700 px-3 py-2 text-xs hover:border-cyan-400 hover:text-cyan-200"
-                    type="button"
-                    onClick={() => void createEntry('directory', null)}
-                  >
-                    New folder
-                  </button>
-                  <button
-                    className="rounded-md bg-cyan-400 px-3 py-2 text-xs font-semibold text-slate-950 hover:bg-cyan-300"
-                    type="button"
-                    onClick={() => void createEntry('file', null)}
-                  >
-                    New file
-                  </button>
-                </div>
-              </div>
-              <div className="p-3">
-                {displayedTree.length === 0 ? (
-                  <p className="p-3 text-sm text-slate-400">This repository has no files yet.</p>
-                ) : (
-                  <ul>
-                    {displayedTree.map((node) => (
-                      <TreeNodeRow
-                        key={node.path}
-                        node={node}
-                        depth={0}
-                        expanded={expanded}
-                        selectedFile={activeFilePath}
-                        onToggle={toggleDirectory}
-                        onSelectFile={(path) => void openFile(path)}
-                        onOpenMenu={openContextMenu}
-                      />
-                    ))}
-                  </ul>
-                )}
-              </div>
-            </aside>
+          <section className="relative flex min-h-0 flex-1 flex-col overflow-hidden bg-[#1e1e1e]">
+            <div className="flex min-h-0 flex-1 overflow-hidden">
+              <nav
+                className="flex w-12 shrink-0 flex-col items-center border-r border-[#333] bg-[#333333] py-2 text-xl text-[#c5c5c5]"
+                aria-label="Activity bar"
+              >
+                <button
+                  className={`grid h-12 w-full place-items-center ${!isGitPanelOpen ? 'border-l-2 border-cyan-300 bg-[#373737] text-cyan-200' : 'text-[#aaaaaa] hover:bg-[#3a3a3a] hover:text-white'}`}
+                  title="Explorer"
+                  type="button"
+                  onClick={() => {
+                    setIsExplorerOpen(true);
+                    setIsGitPanelOpen(false);
+                  }}
+                >
+                  ▱
+                </button>
+                <button
+                  className="grid h-12 w-full place-items-center text-[#aaaaaa] hover:bg-[#3a3a3a] hover:text-white"
+                  title="Search"
+                  type="button"
+                >
+                  ⌕
+                </button>
+                <button
+                  className={`grid h-12 w-full place-items-center ${isGitPanelOpen ? 'border-l-2 border-cyan-300 bg-[#373737] text-cyan-200' : 'text-[#aaaaaa] hover:bg-[#3a3a3a] hover:text-white'}`}
+                  title="Source control"
+                  type="button"
+                  onClick={() => {
+                    setIsExplorerOpen(true);
+                    setIsGitPanelOpen(true);
+                    void loadGitStatus();
+                  }}
+                >
+                  ⑂
+                </button>
+                <button
+                  className="grid h-12 w-full place-items-center text-[#aaaaaa] hover:bg-[#3a3a3a] hover:text-white"
+                  title="Run and debug"
+                  type="button"
+                >
+                  ▷
+                </button>
+                <button
+                  className="grid h-12 w-full place-items-center text-[#aaaaaa] hover:bg-[#3a3a3a] hover:text-white"
+                  title="Extensions"
+                  type="button"
+                >
+                  ▦
+                </button>
+                <button
+                  className="mt-auto grid h-12 w-full place-items-center text-[#aaaaaa] hover:bg-[#3a3a3a] hover:text-white"
+                  title="Team collaboration"
+                  type="button"
+                  onClick={() => setIsCollaborationPanelOpen((open) => !open)}
+                >
+                  ◉
+                </button>
+              </nav>
 
-            <section className="flex min-w-0 flex-col overflow-hidden rounded-xl border border-slate-800 bg-slate-900 shadow-xl">
-              <div className="flex min-h-12 overflow-x-auto border-b border-slate-800 bg-slate-950">
-                {tabs.length === 0 ? (
-                  <p className="px-4 py-3 text-sm text-slate-400">Select a file to open it in the editor.</p>
-                ) : (
-                  tabs.map((tab) => (
-                    <div
-                      key={tab.path}
-                      className={`flex shrink-0 items-center gap-2 border-r border-slate-800 px-3 text-sm ${
-                        tab.path === activeFilePath
-                          ? 'bg-slate-900 text-cyan-200'
-                          : 'bg-slate-950 text-slate-400 hover:bg-slate-900'
-                      }`}
+              {isExplorerOpen && isGitPanelOpen ? (
+                <aside className="flex w-72 shrink-0 flex-col border-r border-[#333] bg-[#252526] text-[#cccccc]">
+                  <div className="flex h-9 shrink-0 items-center justify-between px-5 text-[11px] font-semibold uppercase tracking-wide">
+                    <h2>Source Control</h2>
+                    <button
+                      className="text-lg leading-none text-[#bdbdbd] hover:text-white"
+                      type="button"
+                      title="Refresh Git status"
+                      aria-label="Refresh Git status"
+                      onClick={() => void loadGitStatus()}
                     >
-                      <button className="max-w-44 truncate py-3" type="button" onClick={() => setActiveFilePath(tab.path)}>
-                        {tab.path.split('/').pop()}
-                      </button>
-                      <button
-                        className="text-slate-500 hover:text-rose-300"
-                        type="button"
-                        aria-label={`Close ${tab.path}`}
-                        onClick={() => closeTab(tab.path)}
-                      >
-                        ×
-                      </button>
-                    </div>
-                  ))
-                )}
-              </div>
-              <div className="min-h-[30rem] flex-1">
-                {activeTab ? (
-                  <Editor
-                    key={activeTab.path}
-                    height="100%"
-                    language={activeTab.language}
-                    theme="vs-dark"
-                    defaultValue={activeTab.content}
-                    path={activeTab.path}
-                    onMount={(editor) => {
-                      setEditorInstance(editor);
-                      setEditorPath(activeTab.path);
-                    }}
-                    options={{
-                      automaticLayout: true,
-                      fontSize: 14,
-                      minimap: { enabled: false },
-                      padding: { top: 16 },
-                      readOnly: collaborationStatus !== 'Live collaboration connected.',
-                      scrollBeyondLastLine: false,
-                      wordWrap: 'on',
-                    }}
-                  />
-                ) : (
-                  <div className="grid h-full place-items-center p-8 text-center text-slate-400">
-                    <div>
-                      <p className="font-medium text-slate-200">No file open</p>
-                      <p className="mt-2 text-sm">Choose a text file from the explorer to begin editing.</p>
-                    </div>
+                      ↻
+                    </button>
                   </div>
-                )}
-              </div>
-              {activeTab ? (
-                <p className="border-t border-slate-800 px-4 py-2 text-xs text-amber-200">
-                  {collaborationStatus} Changes are saved to the shared workspace shortly after typing.
-                </p>
+                  <div className="border-b border-[#333] px-4 py-3 text-xs text-[#bdbdbd]">
+                    <p className="truncate font-medium text-[#e7e7e7]">{workspace.repoFullName}</p>
+                    <p className="mt-1">
+                      {gitStatus?.current ?? workspace.defaultBranch}
+                      {gitStatus?.ahead ? ` · ↑${gitStatus.ahead}` : ''}
+                      {gitStatus?.behind ? ` · ↓${gitStatus.behind}` : ''}
+                    </p>
+                  </div>
+                  <div className="border-b border-[#333] p-3">
+                    <label className="sr-only" htmlFor="commit-message">
+                      Commit message
+                    </label>
+                    <textarea
+                      id="commit-message"
+                      className="h-20 w-full resize-none rounded border border-[#4b4b4b] bg-[#1e1e1e] p-2 text-xs outline-none placeholder:text-[#777] focus:border-cyan-400"
+                      value={commitMessage}
+                      maxLength={500}
+                      onChange={(event) => setCommitMessage(event.target.value)}
+                      placeholder="Message (required)"
+                    />
+                    <button
+                      className="mt-2 w-full rounded bg-cyan-500 px-3 py-2 text-xs font-semibold text-slate-950 disabled:cursor-not-allowed disabled:bg-[#3c3c3c] disabled:text-[#888]"
+                      type="button"
+                      disabled={gitAction !== null || !commitMessage.trim()}
+                      onClick={() => void performGitAction('commit')}
+                    >
+                      {gitAction === 'commit' ? 'Committing…' : 'Commit all changes'}
+                    </button>
+                  </div>
+                  <div className="flex shrink-0 gap-2 border-b border-[#333] p-3">
+                    <button
+                      className="flex-1 rounded border border-[#4b4b4b] px-2 py-2 text-xs hover:border-cyan-400 disabled:cursor-not-allowed disabled:text-[#777]"
+                      type="button"
+                      disabled={gitAction !== null}
+                      onClick={() => void performGitAction('pull')}
+                    >
+                      {gitAction === 'pull' ? 'Pulling…' : 'Pull'}
+                    </button>
+                    <button
+                      className="flex-1 rounded border border-[#4b4b4b] px-2 py-2 text-xs hover:border-cyan-400 disabled:cursor-not-allowed disabled:text-[#777]"
+                      type="button"
+                      title={
+                        workspace.role === 'OWNER'
+                          ? 'Push to GitHub'
+                          : 'Only the workspace owner can push'
+                      }
+                      disabled={gitAction !== null || workspace.role !== 'OWNER'}
+                      onClick={() => void performGitAction('push')}
+                    >
+                      {gitAction === 'push' ? 'Pushing…' : 'Push'}
+                    </button>
+                  </div>
+                  {gitError ? (
+                    <p className="mx-3 mt-3 rounded border border-rose-500/40 bg-rose-500/10 p-2 text-xs text-rose-200">
+                      {gitError}
+                    </p>
+                  ) : null}
+                  {gitNotice ? (
+                    <p className="mx-3 mt-3 rounded border border-emerald-500/40 bg-emerald-500/10 p-2 text-xs text-emerald-200">
+                      {gitNotice}
+                    </p>
+                  ) : null}
+                  <div className="min-h-0 flex-1 overflow-auto">
+                    <div className="flex items-center justify-between px-4 py-3 text-[11px] font-semibold uppercase tracking-wide">
+                      <span>Changes</span>
+                      <span>{gitStatus?.files.length ?? 0}</span>
+                    </div>
+                    {gitStatus?.files.length ? (
+                      <ul className="px-2 pb-3">
+                        {gitStatus.files.map((file) => (
+                          <li
+                            key={file.path}
+                            className="flex items-center gap-2 rounded px-2 py-1 text-xs hover:bg-[#333333]"
+                          >
+                            <span className="w-4 text-center font-semibold text-amber-300">
+                              {gitFileBadge(file)}
+                            </span>
+                            <span className="min-w-0 flex-1 truncate" title={file.path}>
+                              {file.path}
+                            </span>
+                          </li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <p className="px-4 text-xs text-[#999]">No changes to commit.</p>
+                    )}
+                  </div>
+                  {workspace.role !== 'OWNER' ? (
+                    <p className="border-t border-[#333] p-3 text-xs text-[#999]">
+                      Only the workspace owner can push to GitHub.
+                    </p>
+                  ) : null}
+                </aside>
+              ) : isExplorerOpen ? (
+                <aside className="flex w-72 shrink-0 flex-col border-r border-[#333] bg-[#252526] text-[#cccccc]">
+                  <div className="flex h-9 shrink-0 items-center justify-between px-5 text-[11px] font-semibold uppercase tracking-wide">
+                    <h2>Explorer</h2>
+                    <span className="text-lg leading-none text-[#bdbdbd]">···</span>
+                  </div>
+                  <div className="flex h-7 shrink-0 items-center gap-1 bg-[#333333] px-3 text-xs font-semibold">
+                    <span className="text-cyan-200">⌄</span>
+                    <span className="truncate">{workspace.name}</span>
+                  </div>
+                  <div className="flex shrink-0 gap-1 border-b border-[#333] px-3 py-2">
+                    <button
+                      className="grid h-7 flex-1 place-items-center rounded border border-[#4b4b4b] text-xs hover:border-cyan-400 hover:text-cyan-200"
+                      type="button"
+                      onClick={() => void createEntry('directory', null)}
+                    >
+                      New folder
+                    </button>
+                    <button
+                      className="grid h-7 flex-1 place-items-center rounded bg-cyan-500 text-xs font-semibold text-slate-950 hover:bg-cyan-300"
+                      type="button"
+                      onClick={() => void createEntry('file', null)}
+                    >
+                      New file
+                    </button>
+                  </div>
+                  <div className="min-h-0 flex-1 overflow-auto px-2 py-1">
+                    {displayedTree.length === 0 ? (
+                      <p className="p-3 text-sm text-slate-400">
+                        This repository has no files yet.
+                      </p>
+                    ) : (
+                      <ul>
+                        {displayedTree.map((node) => (
+                          <TreeNodeRow
+                            key={node.path}
+                            node={node}
+                            depth={0}
+                            expanded={expanded}
+                            selectedFile={activeFilePath}
+                            onToggle={toggleDirectory}
+                            onSelectFile={(path) => void openFile(path)}
+                            onOpenMenu={openContextMenu}
+                          />
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                  <div className="shrink-0 border-t border-[#333] text-xs text-[#bdbdbd]">
+                    <p className="border-b border-[#333] px-4 py-2">› Outline</p>
+                    <p className="border-b border-[#333] px-4 py-2">› Timeline</p>
+                    <p className="px-4 py-2">› Git</p>
+                  </div>
+                </aside>
               ) : null}
-            </section>
 
-            <aside className="rounded-xl border border-slate-800 bg-slate-900 p-5 shadow-xl">
-              <h2 className="font-semibold">Workspace</h2>
-              <p className="mt-3 text-sm text-slate-400">Branch: {workspace.defaultBranch}</p>
-              <div className="mt-6 border-t border-slate-800 pt-5">
-                <h3 className="text-sm font-semibold text-slate-200">Git</h3>
-                <div className="mt-3 grid gap-2">
-                  <button className="rounded-md border border-slate-700 px-3 py-2 text-left text-sm text-slate-500" type="button" disabled>
-                    Pull
-                  </button>
-                  <button className="rounded-md border border-slate-700 px-3 py-2 text-left text-sm text-slate-500" type="button" disabled>
-                    Commit
-                  </button>
-                  <button className="rounded-md border border-slate-700 px-3 py-2 text-left text-sm text-slate-500" type="button" disabled>
-                    Push
+              <section className="flex min-w-0 flex-1 flex-col overflow-hidden bg-[#1e1e1e]">
+                <div className="flex h-9 shrink-0 overflow-x-auto border-b border-[#333] bg-[#252526]">
+                  {tabs.length === 0 ? (
+                    <p className="px-4 py-2 text-xs text-[#bdbdbd]">
+                      Select a file to open it in the editor.
+                    </p>
+                  ) : (
+                    tabs.map((tab) => (
+                      <div
+                        key={tab.path}
+                        className={`flex h-9 shrink-0 items-center gap-2 border-r border-[#333] px-3 text-xs ${
+                          tab.path === activeFilePath
+                            ? 'border-t-2 border-t-cyan-400 bg-[#1e1e1e] text-[#f0f0f0]'
+                            : 'bg-[#2d2d2d] text-[#bdbdbd] hover:bg-[#333333]'
+                        }`}
+                      >
+                        <button
+                          className="max-w-44 truncate"
+                          type="button"
+                          onClick={() => setActiveFilePath(tab.path)}
+                        >
+                          {tab.path.split('/').pop()}
+                        </button>
+                        <button
+                          className="text-slate-500 hover:text-rose-300"
+                          type="button"
+                          aria-label={`Close ${tab.path}`}
+                          onClick={() => closeTab(tab.path)}
+                        >
+                          ×
+                        </button>
+                      </div>
+                    ))
+                  )}
+                </div>
+                <div className="min-h-0 flex-1">
+                  {activeTab ? (
+                    <Editor
+                      key={activeTab.path}
+                      height="100%"
+                      language={activeTab.language}
+                      theme="vs-dark"
+                      defaultValue={activeTab.content}
+                      path={activeTab.path}
+                      onMount={(editor) => {
+                        setEditorInstance(editor);
+                        setEditorPath(activeTab.path);
+                      }}
+                      options={{
+                        automaticLayout: true,
+                        fontSize: 14,
+                        minimap: { enabled: true },
+                        padding: { top: 12 },
+                        // Avoid Chromium GPU/canvas artefacts in large collaborative files.
+                        experimentalGpuAcceleration: 'off',
+                        colorDecorators: false,
+                        unicodeHighlight: {
+                          ambiguousCharacters: false,
+                          invisibleCharacters: false,
+                          nonBasicASCII: false,
+                        },
+                        readOnly: collaborationStatus !== 'Live collaboration connected.',
+                        scrollBeyondLastLine: false,
+                        wordWrap: 'off',
+                      }}
+                    />
+                  ) : (
+                    <div className="grid h-full place-items-center p-8 text-center text-slate-400">
+                      <div>
+                        <p className="font-medium text-slate-200">No file open</p>
+                        <p className="mt-2 text-sm">
+                          Choose a text file from the explorer to begin editing.
+                        </p>
+                      </div>
+                    </div>
+                  )}
+                </div>
+                {isBottomPanelOpen ? (
+                  <section className="h-44 shrink-0 border-t border-[#333] bg-[#181818]">
+                    <div className="flex h-9 items-center gap-5 border-b border-[#333] px-4 text-[11px] font-semibold uppercase tracking-wider text-[#bdbdbd]">
+                      <span>Problems</span>
+                      <span>Output</span>
+                      <span className="border-b-2 border-cyan-300 py-[10px] text-[#e7e7e7]">
+                        Terminal
+                      </span>
+                      <span>Ports</span>
+                    </div>
+                    <pre className="h-[8.75rem] overflow-auto p-4 font-mono text-xs leading-6 text-[#bdbdbd]">
+                      together@{workspace.name}:~${' '}
+                      <span className="text-emerald-300">
+                        Workspace terminal will be enabled in Phase 2.
+                      </span>
+                      {'\n'}$ Shared run output and tests will appear here.
+                    </pre>
+                  </section>
+                ) : null}
+              </section>
+            </div>
+            <footer className="flex h-6 shrink-0 items-center justify-between bg-[#007acc] px-3 text-[11px] text-white">
+              <div className="flex items-center gap-4">
+                <span>⑂ {workspace.defaultBranch}</span>
+                <span>↻</span>
+                <span>× 0</span>
+              </div>
+              <div className="flex items-center gap-4">
+                <span>{activeTab ? collaborationStatus : 'Ready'}</span>
+                <span>UTF-8</span>
+                <span>{activeTab?.language ?? 'Plain Text'}</span>
+                <span>◉ {presence.length}</span>
+              </div>
+            </footer>
+
+            {isCollaborationPanelOpen ? (
+              <aside className="absolute bottom-6 right-0 top-0 z-10 flex w-80 flex-col border-l border-[#333] bg-[#252526] shadow-2xl">
+                <div className="flex h-10 shrink-0 items-center justify-between border-b border-[#333] px-4 text-xs font-semibold uppercase tracking-wide">
+                  <span>Team collaboration</span>
+                  <button
+                    className="text-lg text-[#bdbdbd] hover:text-white"
+                    type="button"
+                    aria-label="Close collaboration panel"
+                    onClick={() => setIsCollaborationPanelOpen(false)}
+                  >
+                    ×
                   </button>
                 </div>
-                <p className="mt-3 text-xs text-slate-500">Git actions arrive in Step 10.</p>
-              </div>
-              <div className="mt-6 border-t border-slate-800 pt-5">
-                <h3 className="text-sm font-semibold text-slate-200">Online now ({presence.length})</h3>
-                <div className="mt-3 space-y-2 text-xs text-slate-400">{presence.map((member) => <p key={member.id}>{member.username}{member.filePath ? ` · ${member.filePath}` : ''}</p>)}</div>
-              </div>
-              <div className="mt-6 border-t border-slate-800 pt-5">
-                <h3 className="text-sm font-semibold text-slate-200">Team chat</h3>
-                <div className="mt-3 max-h-56 space-y-3 overflow-auto text-xs">{messages.map((message) => <p key={message.id}><span className="font-semibold text-cyan-200">{message.user.username}</span><br />{message.content}</p>)}</div>
-                <textarea className="mt-3 w-full rounded border border-slate-700 bg-slate-950 p-2 text-xs" value={chatInput} onChange={(event) => setChatInput(event.target.value)} placeholder="Message the team" />
-                <button className="mt-2 rounded bg-cyan-400 px-3 py-2 text-xs font-semibold text-slate-950" type="button" onClick={sendChat}>Send</button>
-              </div>
-            </aside>
+                <div className="border-b border-[#333] px-4 py-3">
+                  <h3 className="text-sm font-semibold">Online now ({presence.length})</h3>
+                  <div className="mt-2 space-y-2 text-xs text-[#bdbdbd]">
+                    {presence.map((member) => (
+                      <p key={member.id}>
+                        {member.username}
+                        {member.filePath ? ` · ${member.filePath}` : ''}
+                      </p>
+                    ))}
+                  </div>
+                </div>
+                <div className="flex min-h-0 flex-1 flex-col p-4">
+                  <h3 className="text-sm font-semibold">Team chat</h3>
+                  {chatError ? (
+                    <p className="mt-2 rounded border border-amber-500/40 bg-amber-500/10 p-2 text-xs text-amber-100">
+                      {chatError}
+                    </p>
+                  ) : null}
+                  <div className="mt-3 min-h-0 flex-1 space-y-3 overflow-auto text-xs">
+                    {messages.map((message) => (
+                      <p key={message.id}>
+                        <span className="font-semibold text-cyan-200">{message.user.username}</span>
+                        <br />
+                        {message.content}
+                      </p>
+                    ))}
+                  </div>
+                  <textarea
+                    className="mt-3 h-20 w-full resize-none rounded border border-[#4b4b4b] bg-[#1e1e1e] p-2 text-xs outline-none focus:border-cyan-400 disabled:cursor-not-allowed disabled:opacity-60"
+                    value={chatInput}
+                    disabled={!isChatConnected}
+                    onChange={(event) => setChatInput(event.target.value)}
+                    placeholder={isChatConnected ? 'Message the team' : 'Reconnecting chat…'}
+                  />
+                  <button
+                    className="mt-2 self-end rounded bg-cyan-500 px-3 py-2 text-xs font-semibold text-slate-950 hover:bg-cyan-300 disabled:cursor-not-allowed disabled:bg-[#3c3c3c] disabled:text-[#888]"
+                    type="button"
+                    disabled={!isChatConnected || !chatInput.trim()}
+                    onClick={sendChat}
+                  >
+                    Send
+                  </button>
+                </div>
+              </aside>
+            ) : null}
           </section>
         ) : null}
       </section>

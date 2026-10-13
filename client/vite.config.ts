@@ -12,6 +12,19 @@ export default defineConfig(({ mode }) => {
     .split(',')
     .map((host) => host.trim())
     .filter(Boolean);
+  const proxy = {
+    '/health': proxyTarget,
+    '/auth': proxyTarget,
+    '/api': proxyTarget,
+    '/socket.io': {
+      target: proxyTarget,
+      ws: true,
+    },
+    '/yjs': {
+      target: proxyTarget,
+      ws: true,
+    },
+  };
 
   return {
     plugins: [react(), tailwindcss()],
@@ -25,27 +38,27 @@ export default defineConfig(({ mode }) => {
         },
       ],
     },
+    // Monaco workers are loaded as native ESM workers. Let Vite serve them directly
+    // instead of placing their worker entries in the dependency optimization cache.
     optimizeDeps: {
-      exclude: ['y-monaco'],
+      exclude: ['monaco-editor', 'y-monaco'],
     },
     server: {
       host: '0.0.0.0',
       port,
       strictPort: true,
       allowedHosts,
-      proxy: {
-        '/health': proxyTarget,
-        '/auth': proxyTarget,
-        '/api': proxyTarget,
-        '/socket.io': {
-          target: proxyTarget,
-          ws: true,
-        },
-        '/yjs': {
-          target: proxyTarget,
-          ws: true,
-        },
-      },
+      proxy,
+    },
+    // Use the same proxy and allowed-host policy when the container serves the
+    // production build. This avoids Vite's per-module development transforms
+    // on every public ngrok refresh.
+    preview: {
+      host: '0.0.0.0',
+      port,
+      strictPort: true,
+      allowedHosts,
+      proxy,
     },
   };
 });
