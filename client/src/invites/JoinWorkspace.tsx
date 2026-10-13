@@ -74,16 +74,18 @@ export function JoinWorkspace({ token }: { token: string }) {
   return (
     <main className="min-h-screen bg-slate-950 px-6 py-16 text-slate-100">
       <section className="mx-auto max-w-xl rounded-xl border border-slate-800 bg-slate-900 p-8 shadow-2xl">
-        <p className="text-sm font-semibold uppercase tracking-[0.2em] text-cyan-400">Together</p>
+        <p className="text-sm font-semibold uppercase tracking-[0.2em] text-cyan-300">Together</p>
         {joinState.status === 'joining' ? (
           <>
-            <h1 className="mt-3 text-3xl font-bold">Joining workspace…</h1>
+            <h1 className="font-display mt-3 text-5xl text-slate-50">Joining workspace</h1>
             <p className="mt-4 text-slate-300">Checking your invite and adding you to the team.</p>
           </>
         ) : null}
         {joinState.status === 'joined' ? (
           <>
-            <h1 className="mt-3 text-3xl font-bold">You joined {joinState.workspaceName}</h1>
+            <h1 className="font-display mt-3 text-5xl text-slate-50">
+              You joined {joinState.workspaceName}
+            </h1>
             <p className="mt-4 text-slate-300">
               You can now access {joinState.repoFullName} from your dashboard.
             </p>
@@ -98,7 +100,7 @@ export function JoinWorkspace({ token }: { token: string }) {
         ) : null}
         {joinState.status === 'error' ? (
           <>
-            <h1 className="mt-3 text-3xl font-bold">Unable to join workspace</h1>
+            <h1 className="font-display mt-3 text-5xl text-slate-50">Unable to join workspace</h1>
             <p className="mt-4 text-rose-300">{joinState.message}</p>
             <button
               className="mt-6 rounded-md border border-slate-600 px-4 py-2 font-semibold text-slate-100 hover:border-slate-400"
