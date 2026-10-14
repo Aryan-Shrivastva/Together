@@ -18,6 +18,13 @@ enum WorkspaceRole {
   COLLABORATOR
 }
 
+enum WorkspaceRuntimeStatus {
+  STOPPED
+  STARTING
+  RUNNING
+  ERROR
+}
+
 model User {
   id                          String            @id @default(cuid())
   githubId                    String            @unique
@@ -46,8 +53,22 @@ model Workspace {
   members       WorkspaceMember[]
   invites       Invite[]
   chatMessages  ChatMessage[]
+  runtime       WorkspaceRuntime?
 
   @@index([ownerId])
+}
+
+model WorkspaceRuntime {
+  id                    String                 @id @default(cuid())
+  workspaceId           String                 @unique
+  dockerContainerId     String?                @unique
+  dockerNetworkId       String?
+  status                WorkspaceRuntimeStatus @default(STOPPED)
+  dependencyFingerprint String?
+  lastError             String?
+  startedAt             DateTime?
+  updatedAt             DateTime               @updatedAt
+  workspace             Workspace              @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
 }
 
 model WorkspaceMember {

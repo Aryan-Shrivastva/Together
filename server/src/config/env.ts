@@ -11,6 +11,12 @@ const applicationEnvironmentSchema = z.object({
   FILE_TREE_MAX_ENTRIES: z.coerce.number().int().min(100).max(100_000).default(10_000),
   COLLABORATION_PERSIST_DEBOUNCE_MS: z.coerce.number().int().min(1_000).max(5_000).default(1_500),
   COLLABORATION_DOC_UNLOAD_MS: z.coerce.number().int().min(5_000).max(300_000).default(30_000),
+  WORKSPACE_RUNTIME_IMAGE: z.string().min(1).default('together-workspace-runtime:local'),
+  WORKSPACE_VOLUME_NAME: z.string().min(1).default('together_workspace_data'),
+  WORKSPACE_RUNTIME_MEMORY_MB: z.coerce.number().int().min(128).max(4_096).default(768),
+  WORKSPACE_RUNTIME_CPU_COUNT: z.coerce.number().min(0.1).max(4).default(1),
+  WORKSPACE_RUNTIME_PIDS_LIMIT: z.coerce.number().int().min(32).max(512).default(128),
+  WORKSPACE_RUNTIME_IDLE_MS: z.coerce.number().int().min(60_000).max(3_600_000).default(900_000),
 });
 
 const base64KeySchema = z.string().refine((value) => {

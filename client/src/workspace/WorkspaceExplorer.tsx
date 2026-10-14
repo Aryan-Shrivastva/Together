@@ -77,6 +77,11 @@ type GitStatus = {
 type GitStatusResponse = Omit<GitStatus, 'files'> & {
   files: Array<{ path: string; index: string; working_dir: string }>;
 };
+type Runtime = {
+  status: 'STOPPED' | 'STARTING' | 'RUNNING' | 'ERROR';
+  dependencies: 'not detected' | 'not installed' | 'installed';
+  error?: string;
+};
 
 function getErrorMessage(payload: unknown): string {
   if (
@@ -146,6 +151,22 @@ function isGitStatus(value: unknown): value is GitStatusResponse {
         'working_dir' in file &&
         typeof file.working_dir === 'string',
     )
+  );
+}
+
+function isRuntime(value: unknown): value is Runtime {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    'status' in value &&
+    (value.status === 'STOPPED' ||
+      value.status === 'STARTING' ||
+      value.status === 'RUNNING' ||
+      value.status === 'ERROR') &&
+    'dependencies' in value &&
+    (value.dependencies === 'not detected' ||
+      value.dependencies === 'not installed' ||
+      value.dependencies === 'installed')
   );
 }
 
@@ -349,6 +370,10 @@ export function WorkspaceExplorer({ workspaceId }: { workspaceId: string }) {
   const [gitError, setGitError] = useState<string | null>(null);
   const [gitNotice, setGitNotice] = useState<string | null>(null);
   const [commitMessage, setCommitMessage] = useState('');
+  const [runtime, setRuntime] = useState<Runtime | null>(null);
+  const [runtimeError, setRuntimeError] = useState<string | null>(null);
+  const [runtimeNotice, setRuntimeNotice] = useState<string | null>(null);
+  const [isInstallingDependencies, setIsInstallingDependencies] = useState(false);
   const presenceSocketRef = useRef<ReturnType<typeof io> | null>(null);
 
   const loadTree = useCallback(async () => {
@@ -434,6 +459,40 @@ export function WorkspaceExplorer({ workspaceId }: { workspaceId: string }) {
       isCurrent = false;
     };
   }, [loadTree, workspaceId]);
+
+  useEffect(() => {
+    if (workspace?.status !== 'READY') {
+      return;
+    }
+
+    let isCurrent = true;
+    void requestJson(`/api/workspaces/${workspaceId}/runtime/start`)
+      .then((payload) => {
+        if (
+          isCurrent &&
+          typeof payload === 'object' &&
+          payload !== null &&
+          'runtime' in payload &&
+          isRuntime(payload.runtime)
+        ) {
+          setRuntime(payload.runtime);
+          setRuntimeError(null);
+        }
+      })
+      .catch((requestError: unknown) => {
+        if (isCurrent) {
+          setRuntimeError(
+            requestError instanceof Error
+              ? requestError.message
+              : 'Unable to start the shared runtime.',
+          );
+        }
+      });
+
+    return () => {
+      isCurrent = false;
+    };
+  }, [workspace?.status, workspaceId]);
 
   useEffect(() => {
     if (workspace?.status !== 'READY') {
@@ -640,6 +699,43 @@ export function WorkspaceExplorer({ workspaceId }: { workspaceId: string }) {
       setGitError(requestError instanceof Error ? requestError.message : `Git ${action} failed.`);
     } finally {
       setGitAction(null);
+    }
+  }
+
+  async function installDependencies() {
+    setIsInstallingDependencies(true);
+    setRuntimeError(null);
+    setRuntimeNotice(null);
+    try {
+      const payload = await requestJson(`/api/workspaces/${workspaceId}/runtime/install`, {
+        method: 'POST',
+      });
+      if (
+        typeof payload !== 'object' ||
+        payload === null ||
+        !('message' in payload) ||
+        typeof payload.message !== 'string'
+      ) {
+        throw new Error('The dependency installation response was invalid.');
+      }
+      setRuntimeNotice(payload.message);
+      const runtimePayload = await requestJson(`/api/workspaces/${workspaceId}/runtime`);
+      if (
+        typeof runtimePayload === 'object' &&
+        runtimePayload !== null &&
+        'runtime' in runtimePayload &&
+        isRuntime(runtimePayload.runtime)
+      ) {
+        setRuntime(runtimePayload.runtime);
+      }
+    } catch (requestError) {
+      setRuntimeError(
+        requestError instanceof Error
+          ? requestError.message
+          : 'Unable to install workspace dependencies.',
+      );
+    } finally {
+      setIsInstallingDependencies(false);
     }
   }
 
@@ -1203,13 +1299,41 @@ export function WorkspaceExplorer({ workspaceId }: { workspaceId: string }) {
                       </span>
                       <span>Ports</span>
                     </div>
-                    <pre className="h-[8.75rem] overflow-auto p-4 font-mono text-xs leading-6 text-[#d4bd99]">
-                      together@{workspace.name}:~${' '}
-                      <span className="text-emerald-300">
-                        Workspace terminal will be enabled in Phase 2.
-                      </span>
-                      {'\n'}$ Shared run output and tests will appear here.
-                    </pre>
+                    <div className="flex h-[8.75rem] items-center justify-between gap-6 overflow-auto p-4 text-xs text-[#d4bd99]">
+                      <div>
+                        <p className="font-semibold text-[#fbf1c7]">
+                          Shared runtime:{' '}
+                          <span
+                            className={
+                              runtime?.status === 'RUNNING' ? 'text-emerald-300' : 'text-amber-200'
+                            }
+                          >
+                            {runtime?.status.toLowerCase() ?? 'starting'}
+                          </span>
+                        </p>
+                        <p className="mt-2">Dependencies: {runtime?.dependencies ?? 'checking'}</p>
+                        <p className="mt-2 text-[#a89984]">
+                          This workspace runtime is shared by the team and stops after inactivity.
+                        </p>
+                        {runtimeError ? <p className="mt-2 text-rose-300">{runtimeError}</p> : null}
+                        {runtimeNotice ? (
+                          <p className="mt-2 text-emerald-300">{runtimeNotice}</p>
+                        ) : null}
+                      </div>
+                      <div className="shrink-0 text-right">
+                        <button
+                          className="rounded border border-[#6b655c] px-3 py-2 font-semibold text-[#fbf1c7] hover:border-cyan-400 disabled:cursor-not-allowed disabled:text-[#6b655c]"
+                          type="button"
+                          disabled={isInstallingDependencies || runtime?.status !== 'RUNNING'}
+                          onClick={() => void installDependencies()}
+                        >
+                          {isInstallingDependencies ? 'Installing…' : 'Install dependencies'}
+                        </button>
+                        <p className="mt-2 max-w-52 text-[11px] text-[#8e8373]">
+                          Interactive terminal commands arrive in the next Phase 2 step.
+                        </p>
+                      </div>
+                    </div>
                   </section>
                 ) : null}
               </section>

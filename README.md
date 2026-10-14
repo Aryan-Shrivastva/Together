@@ -11,8 +11,9 @@ Together is a browser-based, real-time collaborative development workspace for s
 - Presence and persistent workspace chat.
 - Git status, commit-all, pull, and owner-only push from Source Control.
 - Docker Compose startup with PostgreSQL, the API server, and the browser client.
+- A per-workspace restricted Node/Python runtime that starts on workspace open and can install detected dependencies once for the team.
 
-Phase 2 features—terminal, code execution, branches, previews, datasets, and export—are intentionally not implemented yet.
+Interactive terminals, run/test controls, branches, previews, datasets, and export are introduced in later Phase 2 steps.
 
 ## Prerequisites
 
@@ -67,6 +68,12 @@ docker compose down
 5. Choose **Pull** before working with newer remote commits. Resolve any reported conflict before retrying.
 
 The OAuth token is stored encrypted on the server and is never sent to the browser. If push says GitHub authentication failed, sign out and sign in with GitHub again to refresh the stored token.
+
+## Shared runtime
+
+Opening a ready workspace starts (or reuses) its dedicated Node/Python container. The bottom panel reports its status and offers **Install dependencies** when it detects `package.json`, `requirements.txt`, or `pyproject.toml`. The runtime has CPU, memory, process, filesystem, and per-workspace network limits; it stops after inactivity.
+
+Interactive terminal commands and shared command output are the next Phase 2 step.
 
 ## Mid-sem demo script
 

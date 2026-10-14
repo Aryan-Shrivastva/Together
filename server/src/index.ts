@@ -14,8 +14,10 @@ import { inviteRouter } from './routes/invites.js';
 import { chatRouter } from './routes/chat.js';
 import { gitRouter } from './routes/git.js';
 import { fileRouter } from './routes/files.js';
+import { runtimeRouter } from './routes/runtime.js';
 import { workspaceRouter } from './routes/workspaces.js';
 import { collaborationService } from './services/collaborationService.js';
+import { runtimeService } from './services/runtimeService.js';
 import {
   initializeCollaborationSockets,
   initializeWorkspaceSockets,
@@ -65,6 +67,7 @@ app.use('/api', inviteRouter);
 app.use('/api', chatRouter);
 app.use('/api', gitRouter);
 app.use('/api', fileRouter);
+app.use('/api', runtimeRouter);
 app.get('/api/me', async (request, response, next) => {
   try {
     const userId = request.authUser?.sub;
@@ -142,6 +145,9 @@ initializeCollaborationSockets(httpServer);
 
 httpServer.listen(env.SERVER_PORT, () => {
   console.info(`Server listening on port ${env.SERVER_PORT}`);
+  void runtimeService.resumeIdleTimers().catch(() => {
+    console.error('Workspace runtime idle recovery failed.');
+  });
 });
 
 let isShuttingDown = false;

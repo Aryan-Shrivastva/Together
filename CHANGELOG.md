@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased — Phase 2, Step 12
+
+- Added a per-workspace Docker runtime with Node and Python, secure resource limits, isolated networking, and an idle shutdown timer.
+- Added runtime start/status and one-click dependency installation for Node and Python project manifests.
+
 ## Unreleased — Phase 1, Step 11
 
 - Added in-memory rate limits for authentication, invite, Git, chat-history, and live chat message traffic.

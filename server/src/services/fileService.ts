@@ -28,7 +28,12 @@ export class FileService {
       const nodes: FileTreeNode[] = [];
 
       for (const entry of entries) {
-        if (entry.name === '.git' || entry.isSymbolicLink()) {
+        if (
+          entry.name === '.git' ||
+          entry.name === 'node_modules' ||
+          entry.name === '.together' ||
+          entry.isSymbolicLink()
+        ) {
           continue;
         }
 

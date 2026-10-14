@@ -30,6 +30,12 @@ services:
       FILE_TREE_MAX_ENTRIES: ${FILE_TREE_MAX_ENTRIES:-10000}
       COLLABORATION_PERSIST_DEBOUNCE_MS: ${COLLABORATION_PERSIST_DEBOUNCE_MS:-1500}
       COLLABORATION_DOC_UNLOAD_MS: ${COLLABORATION_DOC_UNLOAD_MS:-30000}
+      WORKSPACE_RUNTIME_IMAGE: ${WORKSPACE_RUNTIME_IMAGE:-together-workspace-runtime:local}
+      WORKSPACE_VOLUME_NAME: ${WORKSPACE_VOLUME_NAME:-together_workspace_data}
+      WORKSPACE_RUNTIME_MEMORY_MB: ${WORKSPACE_RUNTIME_MEMORY_MB:-768}
+      WORKSPACE_RUNTIME_CPU_COUNT: ${WORKSPACE_RUNTIME_CPU_COUNT:-1}
+      WORKSPACE_RUNTIME_PIDS_LIMIT: ${WORKSPACE_RUNTIME_PIDS_LIMIT:-128}
+      WORKSPACE_RUNTIME_IDLE_MS: ${WORKSPACE_RUNTIME_IDLE_MS:-900000}
       DATABASE_URL: postgresql://${POSTGRES_USER:-together}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-together}?schema=public
       GITHUB_CLIENT_ID: ${GITHUB_CLIENT_ID:-}
       GITHUB_CLIENT_SECRET: ${GITHUB_CLIENT_SECRET:-}
@@ -42,9 +48,20 @@ services:
       - .:/app
       - root_node_modules:/app/node_modules
       - workspace_data:/data/workspaces
+      - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
       postgres:
         condition: service_healthy
+      runtime-image:
+        condition: service_completed_successfully
+
+  runtime-image:
+    build:
+      context: .
+      dockerfile: runner/Dockerfile
+    image: ${WORKSPACE_RUNTIME_IMAGE:-together-workspace-runtime:local}
+    command: ['true']
+    restart: 'no'
 
   client:
     build:
@@ -69,3 +86,4 @@ volumes:
   postgres_data:
   root_node_modules:
   workspace_data:
+    name: ${WORKSPACE_VOLUME_NAME:-together_workspace_data}
