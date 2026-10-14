@@ -85,7 +85,7 @@ export function Landing({ health }: { health: HealthState }) {
         className="pointer-events-none absolute inset-0 opacity-40"
         style={{
           backgroundImage:
-            'linear-gradient(rgba(240,228,197,0.05) 1px, transparent 1px), linear-gradient(90deg, rgba(240,228,197,0.05) 1px, transparent 1px)',
+            'linear-gradient(rgba(255,213,106,0.14) 1px, transparent 1px), linear-gradient(90deg, rgba(255,213,106,0.14) 1px, transparent 1px)',
           backgroundSize: '72px 72px',
           maskImage: 'radial-gradient(ellipse at 50% 20%, black, transparent 75%)',
         }}
