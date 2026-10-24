@@ -11,6 +11,8 @@ const applicationEnvironmentSchema = z.object({
   FILE_TREE_MAX_ENTRIES: z.coerce.number().int().min(100).max(100_000).default(10_000),
   COLLABORATION_PERSIST_DEBOUNCE_MS: z.coerce.number().int().min(1_000).max(5_000).default(1_500),
   COLLABORATION_DOC_UNLOAD_MS: z.coerce.number().int().min(5_000).max(300_000).default(30_000),
+  FALKORDB_HOST: z.string().min(1).default('localhost'),
+  FALKORDB_PORT: z.coerce.number().int().min(1).max(65535).default(6379),
 });
 
 const base64KeySchema = z.string().refine((value) => {

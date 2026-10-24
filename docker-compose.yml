@@ -1,4 +1,16 @@
 services:
+  falkordb:
+    image: falkordb/falkordb:latest
+    ports:
+      - '${FALKORDB_PORT:-6379}:6379'
+    volumes:
+      - falkordb_data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
   postgres:
     image: postgres:16-alpine
     environment:
@@ -36,6 +48,8 @@ services:
       GITHUB_OAUTH_REDIRECT_URL: ${GITHUB_OAUTH_REDIRECT_URL:-}
       JWT_SECRET: ${JWT_SECRET:-}
       TOKEN_ENCRYPTION_KEY: ${TOKEN_ENCRYPTION_KEY:-}
+      FALKORDB_HOST: falkordb
+      FALKORDB_PORT: 6379
     ports:
       - '${SERVER_PORT:-4000}:${SERVER_PORT:-4000}'
     volumes:
@@ -44,6 +58,8 @@ services:
       - workspace_data:/data/workspaces
     depends_on:
       postgres:
+        condition: service_healthy
+      falkordb:
         condition: service_healthy
 
   client:
@@ -67,5 +83,6 @@ services:
 
 volumes:
   postgres_data:
+  falkordb_data:
   root_node_modules:
   workspace_data:

@@ -8,10 +8,17 @@ export default defineConfig(({ mode }) => {
   const environment = loadEnv(mode, process.cwd(), '');
   const port = Number(environment.CLIENT_PORT ?? 5173);
   const proxyTarget = environment.VITE_API_PROXY_TARGET ?? 'http://localhost:4000';
-  const allowedHosts = (environment.VITE_ALLOWED_HOSTS ?? 'localhost')
-    .split(',')
-    .map((host) => host.trim())
-    .filter(Boolean);
+  const allowedHosts = [
+    ...(environment.VITE_ALLOWED_HOSTS ?? 'localhost')
+      .split(',')
+      .map((host) => host.trim())
+      .filter(Boolean),
+    '.ngrok-free.app',
+    '.ngrok-free.dev',
+    '.ngrok.app',
+    '.ngrok.io',
+    '.ngrok.dev',
+  ];
   const proxy = {
     '/health': proxyTarget,
     '/auth': proxyTarget,

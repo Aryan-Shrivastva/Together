@@ -6,7 +6,7 @@ import { MonacoBinding } from 'y-monaco';
 import { WebsocketProvider } from 'y-websocket';
 import * as Y from 'yjs';
 
-import { useAuth } from '../auth/AuthContext';
+import { WorkspaceBrain } from './WorkspaceBrain';
 
 loader.config({ monaco });
 
@@ -344,6 +344,7 @@ export function WorkspaceExplorer({ workspaceId }: { workspaceId: string }) {
   const [isGitPanelOpen, setIsGitPanelOpen] = useState(false);
   const [isBottomPanelOpen, setIsBottomPanelOpen] = useState(true);
   const [isCollaborationPanelOpen, setIsCollaborationPanelOpen] = useState(false);
+  const [isBrainOpen, setIsBrainOpen] = useState(false);
   const [gitStatus, setGitStatus] = useState<GitStatus | null>(null);
   const [gitAction, setGitAction] = useState<'commit' | 'pull' | 'push' | null>(null);
   const [gitError, setGitError] = useState<string | null>(null);
@@ -853,9 +854,24 @@ export function WorkspaceExplorer({ workspaceId }: { workspaceId: string }) {
               title="Open team chat"
               type="button"
               aria-label="Open team chat"
-              onClick={() => setIsCollaborationPanelOpen((open) => !open)}
+              onClick={() => {
+                setIsCollaborationPanelOpen((open) => !open);
+                setIsBrainOpen(false);
+              }}
             >
               ▯
+            </button>
+            <button
+              className={`grid h-7 w-7 place-items-center rounded text-base hover:bg-[#7a6856] hover:text-white ${isBrainOpen ? 'bg-[#7a6856] text-cyan-200' : 'text-[#e2c7a4]'}`}
+              title="Open workspace brain"
+              type="button"
+              aria-label="Open workspace brain"
+              onClick={() => {
+                setIsBrainOpen((open) => !open);
+                setIsCollaborationPanelOpen(false);
+              }}
+            >
+              ◉
             </button>
             <button
               className="ml-2 text-cyan-300 hover:text-cyan-100"
@@ -1227,6 +1243,14 @@ export function WorkspaceExplorer({ workspaceId }: { workspaceId: string }) {
                 <span>◉ {presence.length}</span>
               </div>
             </footer>
+
+            {isBrainOpen ? (
+              <WorkspaceBrain
+                workspaceId={workspaceId}
+                onOpenFile={(path) => void openFile(path)}
+                onClose={() => setIsBrainOpen(false)}
+              />
+            ) : null}
 
             {isCollaborationPanelOpen ? (
               <aside className="absolute bottom-6 right-0 top-0 z-10 flex w-80 flex-col border-l border-[#7a6856] bg-[#4e4338] shadow-2xl">

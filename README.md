@@ -50,7 +50,7 @@ Never commit `.env` or share client secrets, JWT secrets, encryption keys, OAuth
 docker compose up --build
 ```
 
-Open `http://localhost:5173`. The client builds once when the container starts, then serves optimized static assets. The API is available through the client proxy, so users only need the browser URL.
+Open `http://localhost:5173`. The client builds once when the container starts, then serves optimized static assets. The API is available through the client proxy, so users only need the browser URL. Compose also starts FalkorDB, the graph the workspace brain queries for people, files, commits, and chat.
 
 To stop services while keeping the database and workspace volume:
 

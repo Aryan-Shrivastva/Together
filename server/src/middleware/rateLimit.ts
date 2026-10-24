@@ -82,6 +82,13 @@ export const chatHistoryRateLimit = createRateLimit({
   key: authenticatedRequestKey,
 });
 
+export const brainRateLimit = createRateLimit({
+  windowMs: 60 * 1_000,
+  maxRequests: 20,
+  message: 'Too many workspace brain questions. Please wait a minute and try again.',
+  key: authenticatedRequestKey,
+});
+
 export const gitRateLimit = createRateLimit({
   windowMs: 60 * 1_000,
   maxRequests: 20,

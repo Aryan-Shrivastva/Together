@@ -205,6 +205,37 @@ export function Landing({ health }: { health: HealthState }) {
           </ol>
         </section>
 
+        <section className="mt-16 grid items-start gap-8 lg:grid-cols-[1.1fr_0.9fr]" id="brain">
+          <div>
+            <p className="text-[11px] uppercase tracking-[0.32em] text-cyan-300">Workspace brain</p>
+            <h2 className="font-display mt-4 text-5xl text-slate-50">
+              Ask the repo you already share.
+            </h2>
+            <p className="mt-4 max-w-xl text-sm leading-7 text-slate-300">
+              Open a workspace and ask about its people, files, commits, or chat. Together keeps
+              those links in a FalkorDB graph and answers from the graph, with the file, person, or
+              message each line came from.
+            </p>
+          </div>
+          <div className="rounded-3xl border border-slate-700 bg-slate-950/80 p-6">
+            <p className="text-[11px] uppercase tracking-[0.24em] text-slate-400">Key focus</p>
+            <ul className="mt-4 space-y-3 text-sm text-slate-200">
+              <li className="rounded-2xl border border-slate-700 px-4 py-3">
+                People, files, commits, and chat in one FalkorDB graph
+              </li>
+              <li className="rounded-2xl border border-slate-700 px-4 py-3">
+                Who owns the workspace, and who joined it
+              </li>
+              <li className="rounded-2xl border border-slate-700 px-4 py-3">
+                Every answer points at its source
+              </li>
+              <li className="rounded-2xl border border-slate-700 px-4 py-3">
+                A file source opens in the editor
+              </li>
+            </ul>
+          </div>
+        </section>
+
         <section className="mt-16">
           <h2 className="font-display text-4xl text-slate-50">What you can do today</h2>
           <div className="mt-8 grid gap-4 sm:grid-cols-2">
