@@ -27,7 +27,9 @@ function WorkspaceLoadingScreen() {
 function AuthenticatedApp() {
   const [health, setHealth] = useState<HealthState>('checking');
   const joinToken = /^\/join\/([A-Za-z0-9_-]{43})$/.exec(window.location.pathname)?.[1];
-  const workspaceId = /^\/workspaces\/([0-9a-f-]{36})$/i.exec(window.location.pathname)?.[1];
+  // Workspace IDs are Prisma CUIDs, not UUIDs. Accept the opaque route segment and
+  // let the authenticated API validate that the current user can access it.
+  const workspaceId = /^\/workspaces\/([A-Za-z0-9_-]+)$/.exec(window.location.pathname)?.[1];
 
   useEffect(() => {
     const controller = new AbortController();

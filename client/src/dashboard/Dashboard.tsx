@@ -16,7 +16,7 @@ type Workspace = {
   defaultBranch: string;
   status: 'CLONING' | 'READY' | 'ERROR';
   createdAt: string;
-  role: 'OWNER' | 'COLLABORATOR';
+  role: 'OWNER' | 'COLLABORATOR' | 'VIEWER';
   errorMessage?: string;
 };
 
@@ -24,6 +24,7 @@ type WorkspaceInvite = {
   id: string;
   link: string;
   expiresAt: string;
+  role: 'COLLABORATOR' | 'VIEWER';
 };
 
 function getErrorMessage(payload: unknown): string {
@@ -103,6 +104,9 @@ export function Dashboard() {
   );
   const [creatingInviteWorkspaceId, setCreatingInviteWorkspaceId] = useState<string | null>(null);
   const [copiedInviteWorkspaceId, setCopiedInviteWorkspaceId] = useState<string | null>(null);
+  const [inviteRoleByWorkspace, setInviteRoleByWorkspace] = useState<
+    Record<string, 'COLLABORATOR' | 'VIEWER'>
+  >({});
 
   const hasCloningWorkspace = useMemo(
     () => workspaces.some((workspace) => workspace.status === 'CLONING'),
@@ -217,6 +221,8 @@ export function Dashboard() {
     try {
       const payload = await requestJson(`/api/workspaces/${workspaceId}/invites`, {
         method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ role: inviteRoleByWorkspace[workspaceId] ?? 'COLLABORATOR' }),
       });
 
       if (
@@ -376,6 +382,26 @@ export function Dashboard() {
                 ) : null}
                 {workspace.role === 'OWNER' ? (
                   <div className="mt-4 border-t border-slate-800 pt-4">
+                    <label
+                      className="mb-2 block text-xs text-slate-400"
+                      htmlFor={`invite-role-${workspace.id}`}
+                    >
+                      New invite access
+                    </label>
+                    <select
+                      className="mb-2 w-full rounded-md border border-slate-700 bg-slate-950 p-2 text-sm text-slate-200"
+                      id={`invite-role-${workspace.id}`}
+                      value={inviteRoleByWorkspace[workspace.id] ?? 'COLLABORATOR'}
+                      onChange={(event) =>
+                        setInviteRoleByWorkspace((roles) => ({
+                          ...roles,
+                          [workspace.id]: event.target.value as 'COLLABORATOR' | 'VIEWER',
+                        }))
+                      }
+                    >
+                      <option value="COLLABORATOR">Collaborator — can edit</option>
+                      <option value="VIEWER">Viewer — read only</option>
+                    </select>
                     <button
                       className="rounded-md border border-cyan-400 px-3 py-2 text-sm font-semibold text-cyan-300 hover:bg-cyan-400 hover:text-slate-950 disabled:cursor-not-allowed disabled:opacity-50"
                       type="button"

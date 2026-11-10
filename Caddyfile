@@ -1,0 +1,15 @@
+{$PUBLIC_HOST} {
+  encode gzip
+
+  header {
+    Strict-Transport-Security "max-age=31536000; includeSubDomains"
+    X-Content-Type-Options "nosniff"
+    X-Frame-Options "DENY"
+    Referrer-Policy "no-referrer"
+    Permissions-Policy "camera=(), microphone=(), geolocation=()"
+  }
+
+  @backend path /health /auth/* /api/* /preview/* /socket.io/* /yjs/*
+  reverse_proxy @backend server:4000
+  reverse_proxy client:80
+}

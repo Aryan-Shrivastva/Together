@@ -1,0 +1,167 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:?Set POSTGRES_DB in the production environment}
+      POSTGRES_USER: ${POSTGRES_USER:?Set POSTGRES_USER in the production environment}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in the production environment}
+    volumes:
+      - postgres_data_production:/var/lib/postgresql/data
+    networks: [backend]
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}"']
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  minio:
+    image: minio/minio:RELEASE.2025-10-15T17-29-55Z
+    restart: unless-stopped
+    command: server /data
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:?Set MINIO_ACCESS_KEY in the production environment}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:?Set MINIO_SECRET_KEY in the production environment}
+    volumes:
+      - minio_data_production:/data
+    networks: [backend]
+
+  runtime-image:
+    build:
+      context: .
+      dockerfile: runner/Dockerfile
+    image: ${WORKSPACE_RUNTIME_IMAGE:?Set WORKSPACE_RUNTIME_IMAGE to a pinned registry image}
+    command: ['true']
+    restart: 'no'
+
+  docker-proxy:
+    image: tecnativa/docker-socket-proxy:0.3.0
+    restart: unless-stopped
+    environment:
+      CONTAINERS: '1'
+      EXEC: '1'
+      INFO: '1'
+      NETWORKS: '1'
+      POST: '1'
+      VOLUMES: '1'
+      EVENTS: '0'
+      IMAGES: '1'
+      AUTH: '0'
+      BUILD: '0'
+      COMMIT: '0'
+      DISTRIBUTION: '0'
+      PING: '1'
+      SECRETS: '0'
+      SWARM: '0'
+      SYSTEM: '0'
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks: [backend]
+
+  server:
+    build:
+      context: .
+      dockerfile: server/Dockerfile.production
+    restart: unless-stopped
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    mem_limit: 1g
+    cpus: 1.0
+    environment:
+      NODE_ENV: production
+      SERVER_PORT: 4000
+      TRUST_PROXY: 'true'
+      DOCKER_HOST: http://docker-proxy:2375
+      CORS_ORIGIN: ${PUBLIC_ORIGIN:?Set PUBLIC_ORIGIN to the HTTPS application origin}
+      WORKSPACE_ROOT: /data/workspaces
+      WORKSPACE_CLONE_TIMEOUT_MS: ${WORKSPACE_CLONE_TIMEOUT_MS:-120000}
+      INVITE_TTL_HOURS: ${INVITE_TTL_HOURS:-168}
+      MAX_FILE_OPEN_BYTES: ${MAX_FILE_OPEN_BYTES:-1048576}
+      FILE_TREE_MAX_ENTRIES: ${FILE_TREE_MAX_ENTRIES:-10000}
+      COLLABORATION_PERSIST_DEBOUNCE_MS: ${COLLABORATION_PERSIST_DEBOUNCE_MS:-1500}
+      COLLABORATION_DOC_UNLOAD_MS: ${COLLABORATION_DOC_UNLOAD_MS:-30000}
+      WORKSPACE_RUNTIME_IMAGE: ${WORKSPACE_RUNTIME_IMAGE:?Set WORKSPACE_RUNTIME_IMAGE to a pinned registry image}
+      WORKSPACE_VOLUME_NAME: ${WORKSPACE_VOLUME_NAME:-together_workspace_data_production}
+      WORKSPACE_RUNTIME_MEMORY_MB: ${WORKSPACE_RUNTIME_MEMORY_MB:-768}
+      WORKSPACE_RUNTIME_CPU_COUNT: ${WORKSPACE_RUNTIME_CPU_COUNT:-1}
+      WORKSPACE_RUNTIME_PIDS_LIMIT: ${WORKSPACE_RUNTIME_PIDS_LIMIT:-128}
+      WORKSPACE_RUNTIME_IDLE_MS: ${WORKSPACE_RUNTIME_IDLE_MS:-900000}
+      PREVIEW_IDLE_MS: ${PREVIEW_IDLE_MS:-900000}
+      MINIO_ENDPOINT: minio
+      MINIO_PORT: 9000
+      MINIO_USE_SSL: 'false'
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:?Set MINIO_ACCESS_KEY in the production environment}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:?Set MINIO_SECRET_KEY in the production environment}
+      MINIO_BUCKET: ${MINIO_BUCKET:-together-datasets}
+      MAX_DATASET_BYTES: ${MAX_DATASET_BYTES:-104857600}
+      MAX_EXPORT_BYTES: ${MAX_EXPORT_BYTES:-268435456}
+      DATABASE_URL: postgresql://${POSTGRES_USER:?Set POSTGRES_USER in the production environment}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in the production environment}@postgres:5432/${POSTGRES_DB:?Set POSTGRES_DB in the production environment}?schema=public
+      GITHUB_CLIENT_ID: ${GITHUB_CLIENT_ID:?Set GITHUB_CLIENT_ID in the production environment}
+      GITHUB_CLIENT_SECRET: ${GITHUB_CLIENT_SECRET:?Set GITHUB_CLIENT_SECRET in the production environment}
+      GITHUB_OAUTH_REDIRECT_URL: ${GITHUB_OAUTH_REDIRECT_URL:?Set the HTTPS GitHub callback URL}
+      JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in the production environment}
+      TOKEN_ENCRYPTION_KEY: ${TOKEN_ENCRYPTION_KEY:?Set TOKEN_ENCRYPTION_KEY in the production environment}
+    volumes:
+      - workspace_data_production:/data/workspaces
+    networks: [backend]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      runtime-image:
+        condition: service_completed_successfully
+      docker-proxy:
+        condition: service_started
+    healthcheck:
+      test: ['CMD', 'node', '-e', "fetch('http://127.0.0.1:4000/health').then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+
+  client:
+    build:
+      context: .
+      dockerfile: client/Dockerfile.production
+    restart: unless-stopped
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    networks: [backend]
+
+  gateway:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    environment:
+      PUBLIC_HOST: ${PUBLIC_HOST:?Set PUBLIC_HOST to the deployed HTTPS hostname}
+    ports:
+      - '80:80'
+      - '443:443'
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks: [edge, backend]
+    depends_on:
+      server:
+        condition: service_healthy
+      client:
+        condition: service_started
+
+volumes:
+  postgres_data_production:
+  workspace_data_production:
+    name: ${WORKSPACE_VOLUME_NAME:-together_workspace_data_production}
+  minio_data_production:
+  caddy_data:
+  caddy_config:
+
+networks:
+  edge:
+  backend:
+    internal: true

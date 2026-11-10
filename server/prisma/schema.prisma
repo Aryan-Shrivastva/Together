@@ -16,9 +16,17 @@ enum WorkspaceStatus {
 enum WorkspaceRole {
   OWNER
   COLLABORATOR
+  VIEWER
 }
 
 enum WorkspaceRuntimeStatus {
+  STOPPED
+  STARTING
+  RUNNING
+  ERROR
+}
+
+enum PreviewStatus {
   STOPPED
   STARTING
   RUNNING
@@ -37,6 +45,7 @@ model User {
   memberships                 WorkspaceMember[]
   createdInvites              Invite[]          @relation("InviteCreator")
   chatMessages                ChatMessage[]
+  activityLogs                ActivityLog[]
 }
 
 model Workspace {
@@ -54,8 +63,68 @@ model Workspace {
   invites       Invite[]
   chatMessages  ChatMessage[]
   runtime       WorkspaceRuntime?
+  config        WorkspaceConfig[]
+  datasets      Dataset[]
+  branches      Branch[]
+  preview       Preview?
+  activityLogs  ActivityLog[]
 
   @@index([ownerId])
+}
+
+model Preview {
+  id                String        @id @default(cuid())
+  workspaceId       String        @unique
+  dockerContainerId String?       @unique
+  dockerNetworkId   String?
+  port              Int
+  status            PreviewStatus @default(STOPPED)
+  lastError         String?
+  startedAt         DateTime?
+  updatedAt         DateTime      @updatedAt
+  workspace         Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([status, updatedAt])
+}
+
+model Branch {
+  id          String   @id @default(cuid())
+  workspaceId String
+  name        String
+  task        String
+  createdById String
+  worktreePath String @unique
+  branchWorkspaceId String? @unique
+  createdAt   DateTime @default(now())
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, name])
+  @@index([workspaceId, createdAt])
+}
+
+model WorkspaceConfig {
+  id             String    @id @default(cuid())
+  workspaceId    String
+  key            String
+  encryptedValue String
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  workspace      Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, key])
+}
+
+model Dataset {
+  id           String    @id @default(cuid())
+  workspaceId  String
+  objectKey    String    @unique
+  originalName String
+  contentType  String
+  sizeBytes    Int
+  createdAt    DateTime  @default(now())
+  workspace    Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, createdAt])
 }
 
 model WorkspaceRuntime {
@@ -89,6 +158,7 @@ model Invite {
   workspaceId String
   token       String    @unique
   createdById String
+  inviteRole WorkspaceRole @default(COLLABORATOR)
   expiresAt   DateTime
   revoked     Boolean   @default(false)
   workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
@@ -109,4 +179,18 @@ model ChatMessage {
 
   @@index([workspaceId, createdAt])
   @@index([userId])
+}
+
+model ActivityLog {
+  id          String        @id @default(cuid())
+  workspaceId String
+  userId      String?
+  action      String
+  details     String?
+  createdAt   DateTime      @default(now())
+  workspace   Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user        User?         @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([workspaceId, createdAt])
+  @@index([userId, createdAt])
 }

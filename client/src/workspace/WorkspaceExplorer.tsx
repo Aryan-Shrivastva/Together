@@ -1,4 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { FitAddon } from '@xterm/addon-fit';
+import { Terminal } from '@xterm/xterm';
+import '@xterm/xterm/css/xterm.css';
 import Editor, { loader } from '@monaco-editor/react';
 import * as monaco from 'monaco-editor';
 import { io } from 'socket.io-client';
@@ -10,25 +13,25 @@ import { useAuth } from '../auth/AuthContext';
 
 loader.config({ monaco });
 
-monaco.editor.defineTheme('mechanoonna', {
+monaco.editor.defineTheme('together-warm-dark', {
   base: 'vs-dark',
   inherit: true,
   rules: [
-    { token: 'comment', foreground: '8e8373', fontStyle: 'italic' },
-    { token: 'keyword', foreground: 'e7c07c' },
-    { token: 'string', foreground: 'c2a571' },
-    { token: 'number', foreground: 'ebdbb2' },
+    { token: 'comment', foreground: '968777', fontStyle: 'italic' },
+    { token: 'keyword', foreground: 'd3ae6d' },
+    { token: 'string', foreground: 'b7c091' },
+    { token: 'number', foreground: 'dfc492' },
   ],
   colors: {
-    'editor.background': '#1c1b19',
-    'editor.foreground': '#f0e4c5',
-    'editorCursor.foreground': '#f0e4c5',
-    'editor.selectionBackground': '#706e6b',
-    'editor.lineHighlightBackground': '#232220',
-    'editorLineNumber.foreground': '#6b655c',
-    'editorLineNumber.activeForeground': '#d4bd99',
-    'editorWidget.background': '#161412',
-    'minimap.background': '#161412',
+    'editor.background': '#1c1b1f',
+    'editor.foreground': '#d8c3a0',
+    'editorCursor.foreground': '#ecd8b6',
+    'editor.selectionBackground': '#554b43',
+    'editor.lineHighlightBackground': '#252321',
+    'editorLineNumber.foreground': '#6f655d',
+    'editorLineNumber.activeForeground': '#c6a062',
+    'editorWidget.background': '#1c1b1f',
+    'minimap.background': '#1c1b1f',
   },
 });
 
@@ -38,7 +41,7 @@ type Workspace = {
   repoFullName: string;
   defaultBranch: string;
   status: 'CLONING' | 'READY' | 'ERROR';
-  role: 'OWNER' | 'COLLABORATOR';
+  role: 'OWNER' | 'COLLABORATOR' | 'VIEWER';
 };
 
 type FileTreeNode = {
@@ -82,6 +85,15 @@ type Runtime = {
   dependencies: 'not detected' | 'not installed' | 'installed';
   error?: string;
 };
+type TerminalTasks = { run: boolean; test: boolean };
+type Preview = {
+  id?: string;
+  status: 'STOPPED' | 'STARTING' | 'RUNNING' | 'ERROR';
+  url?: string;
+  error?: string;
+};
+type Dataset = { id: string; originalName: string; sizeBytes: number };
+type TaskBranch = { id: string; name: string; task: string; branchWorkspaceId?: string | null };
 
 function getErrorMessage(payload: unknown): string {
   if (
@@ -98,7 +110,17 @@ function getErrorMessage(payload: unknown): string {
 
 async function requestJson(path: string, options?: RequestInit): Promise<unknown> {
   const response = await fetch(path, { ...options, credentials: 'include' });
-  const payload: unknown = response.status === 204 ? null : await response.json();
+  if (response.status === 204) return null;
+
+  const responseText = await response.text();
+  let payload: unknown;
+  try {
+    payload = responseText ? JSON.parse(responseText) : null;
+  } catch {
+    throw new Error(
+      'The server returned an unexpected response. Refresh the workspace and try again.',
+    );
+  }
 
   if (!response.ok) {
     throw new Error(getErrorMessage(payload));
@@ -122,7 +144,7 @@ function isWorkspace(value: unknown): value is Workspace {
     'status' in value &&
     (value.status === 'CLONING' || value.status === 'READY' || value.status === 'ERROR') &&
     'role' in value &&
-    (value.role === 'OWNER' || value.role === 'COLLABORATOR')
+    (value.role === 'OWNER' || value.role === 'COLLABORATOR' || value.role === 'VIEWER')
   );
 }
 
@@ -373,8 +395,31 @@ export function WorkspaceExplorer({ workspaceId }: { workspaceId: string }) {
   const [runtime, setRuntime] = useState<Runtime | null>(null);
   const [runtimeError, setRuntimeError] = useState<string | null>(null);
   const [runtimeNotice, setRuntimeNotice] = useState<string | null>(null);
+  const [preview, setPreview] = useState<Preview | null>(null);
+  const [previewAction, setPreviewAction] = useState<'launch' | 'stop' | null>(null);
+  const [previewError, setPreviewError] = useState<string | null>(null);
   const [isInstallingDependencies, setIsInstallingDependencies] = useState(false);
+  const [terminalStatus, setTerminalStatus] = useState('Connecting shared terminal…');
+  const [terminalError, setTerminalError] = useState<string | null>(null);
+  const [terminalTasks, setTerminalTasks] = useState<TerminalTasks>({ run: false, test: false });
+  const [terminalReconnectVersion, setTerminalReconnectVersion] = useState(0);
+  const [datasets, setDatasets] = useState<Dataset[]>([]);
+  const [datasetFile, setDatasetFile] = useState<File | null>(null);
+  const [configKey, setConfigKey] = useState('');
+  const [configValue, setConfigValue] = useState('');
+  const [configKeys, setConfigKeys] = useState<string[]>([]);
+  const [dataError, setDataError] = useState<string | null>(null);
+  const [branchTask, setBranchTask] = useState('');
+  const [branches, setBranches] = useState<TaskBranch[]>([]);
+  const [branchDiff, setBranchDiff] = useState<string | null>(null);
+  const [branchAction, setBranchAction] = useState<{
+    id: string;
+    action: 'merge' | 'discard';
+  } | null>(null);
   const presenceSocketRef = useRef<ReturnType<typeof io> | null>(null);
+  const terminalSocketRef = useRef<ReturnType<typeof io> | null>(null);
+  const terminalHostRef = useRef<HTMLDivElement | null>(null);
+  const isViewer = workspace?.role === 'VIEWER';
 
   const loadTree = useCallback(async () => {
     const payload = await requestJson(`/api/workspaces/${workspaceId}/tree`);
@@ -413,6 +458,113 @@ export function WorkspaceExplorer({ workspaceId }: { workspaceId: string }) {
       );
     }
   }, [workspaceId]);
+
+  const loadWorkspaceData = useCallback(async () => {
+    const [configPayload, datasetPayload] = await Promise.all([
+      requestJson(`/api/workspaces/${workspaceId}/config`),
+      requestJson(`/api/workspaces/${workspaceId}/datasets`),
+    ]);
+    if (
+      typeof configPayload === 'object' &&
+      configPayload &&
+      'config' in configPayload &&
+      Array.isArray(configPayload.config)
+    )
+      setConfigKeys(
+        configPayload.config
+          .filter(
+            (item): item is { key: string } =>
+              typeof item === 'object' &&
+              item !== null &&
+              'key' in item &&
+              typeof item.key === 'string',
+          )
+          .map((item) => item.key),
+      );
+    if (
+      typeof datasetPayload === 'object' &&
+      datasetPayload &&
+      'datasets' in datasetPayload &&
+      Array.isArray(datasetPayload.datasets)
+    )
+      setDatasets(
+        datasetPayload.datasets.filter(
+          (item): item is Dataset =>
+            typeof item === 'object' &&
+            item !== null &&
+            'id' in item &&
+            'originalName' in item &&
+            'sizeBytes' in item &&
+            typeof item.id === 'string' &&
+            typeof item.originalName === 'string' &&
+            typeof item.sizeBytes === 'number',
+        ),
+      );
+  }, [workspaceId]);
+
+  const loadBranches = useCallback(async () => {
+    const payload = await requestJson(`/api/workspaces/${workspaceId}/branches`);
+    if (
+      typeof payload === 'object' &&
+      payload &&
+      'branches' in payload &&
+      Array.isArray(payload.branches)
+    )
+      setBranches(
+        payload.branches.filter(
+          (item): item is TaskBranch =>
+            typeof item === 'object' &&
+            item !== null &&
+            'id' in item &&
+            'name' in item &&
+            'task' in item &&
+            typeof item.id === 'string' &&
+            typeof item.name === 'string' &&
+            typeof item.task === 'string',
+        ),
+      );
+  }, [workspaceId]);
+
+  const loadPreview = useCallback(async () => {
+    const payload = await requestJson(`/api/workspaces/${workspaceId}/preview`);
+    if (
+      typeof payload !== 'object' ||
+      payload === null ||
+      !('preview' in payload) ||
+      typeof payload.preview !== 'object' ||
+      payload.preview === null ||
+      !('status' in payload.preview) ||
+      !['STOPPED', 'STARTING', 'RUNNING', 'ERROR'].includes(String(payload.preview.status))
+    ) {
+      throw new Error('The preview response was invalid.');
+    }
+    setPreview(payload.preview as Preview);
+  }, [workspaceId]);
+
+  const startRuntime = useCallback(async () => {
+    if (isViewer) return;
+    setRuntimeError(null);
+    try {
+      const payload = await requestJson(`/api/workspaces/${workspaceId}/runtime/start`, {
+        method: 'POST',
+      });
+      if (
+        typeof payload !== 'object' ||
+        payload === null ||
+        !('runtime' in payload) ||
+        !isRuntime(payload.runtime)
+      ) {
+        throw new Error('The runtime response was invalid.');
+      }
+      setRuntime(payload.runtime);
+    } catch (requestError) {
+      setRuntimeError(
+        requestError instanceof Error
+          ? requestError.message
+          : 'Unable to start the shared runtime.',
+      );
+    }
+  }, [isViewer, workspaceId]);
 
   useEffect(() => {
     let isCurrent = true;
@@ -461,38 +613,25 @@ export function WorkspaceExplorer({ workspaceId }: { workspaceId: string }) {
   }, [loadTree, workspaceId]);
 
   useEffect(() => {
-    if (workspace?.status !== 'READY') {
+    if (workspace?.status !== 'READY' || isViewer) {
       return;
     }
 
-    let isCurrent = true;
-    void requestJson(`/api/workspaces/${workspaceId}/runtime/start`)
-      .then((payload) => {
-        if (
-          isCurrent &&
-          typeof payload === 'object' &&
-          payload !== null &&
-          'runtime' in payload &&
-          isRuntime(payload.runtime)
-        ) {
-          setRuntime(payload.runtime);
-          setRuntimeError(null);
-        }
-      })
-      .catch((requestError: unknown) => {
-        if (isCurrent) {
-          setRuntimeError(
-            requestError instanceof Error
-              ? requestError.message
-              : 'Unable to start the shared runtime.',
-          );
-        }
-      });
+    void startRuntime();
+  }, [isViewer, startRuntime, workspace?.status]);
 
-    return () => {
-      isCurrent = false;
-    };
-  }, [workspace?.status, workspaceId]);
+  useEffect(() => {
+    if (workspace?.status === 'READY')
+      void loadWorkspaceData().catch(() =>
+        setDataError('Unable to load workspace config or datasets.'),
+      );
+  }, [loadWorkspaceData, workspace?.status]);
+
+  useEffect(() => {
+    if (workspace?.status === 'READY') {
+      void loadPreview().catch(() => setPreviewError('Unable to load branch preview status.'));
+    }
+  }, [loadPreview, workspace?.status]);
 
   useEffect(() => {
     if (workspace?.status !== 'READY') {
@@ -527,13 +666,83 @@ export function WorkspaceExplorer({ workspaceId }: { workspaceId: string }) {
   }, [loadTree, workspace?.status, workspaceId]);
 
   useEffect(() => {
+    const host = terminalHostRef.current;
+    if (workspace?.status !== 'READY' || isViewer || !isBottomPanelOpen || !host) return undefined;
+
+    const terminal = new Terminal({
+      cursorBlink: true,
+      convertEol: true,
+      fontFamily: 'JetBrains Mono, ui-monospace, monospace',
+      fontSize: 12,
+      theme: {
+        background: '#121110',
+        foreground: '#d8c3a0',
+        cursor: '#ecd8b6',
+        selectionBackground: '#554b43',
+        black: '#121110',
+        brightBlack: '#6f655d',
+        yellow: '#d3ae6d',
+        brightYellow: '#dfc492',
+        green: '#b7c091',
+        red: '#b5483a',
+      },
+    });
+    const fitAddon = new FitAddon();
+    terminal.loadAddon(fitAddon);
+    terminal.open(host);
+    fitAddon.fit();
+    const socket = io({ auth: { workspaceId }, withCredentials: true });
+    terminalSocketRef.current = socket;
+    const resize = () => {
+      fitAddon.fit();
+      socket.emit('terminal:resize', { columns: terminal.cols, rows: terminal.rows });
+    };
+    const observer = new ResizeObserver(resize);
+    observer.observe(host);
+    const input = terminal.onData((inputData) =>
+      socket.emit('terminal:input', { input: inputData }),
+    );
+
+    socket.on('connect', () => {
+      setTerminalStatus('Shared terminal connected.');
+      setTerminalError(null);
+      socket.emit('terminal:attach');
+      resize();
+    });
+    socket.on('disconnect', () => setTerminalStatus('Reconnecting shared terminal…'));
+    socket.on('connect_error', () => setTerminalStatus('Reconnecting shared terminal…'));
+    socket.on('terminal:reset', (payload: { output?: string; tasks?: TerminalTasks }) => {
+      terminal.clear();
+      if (payload.output) terminal.write(payload.output);
+      if (payload.tasks) setTerminalTasks(payload.tasks);
+    });
+    socket.on('terminal:output', (payload: { output?: string }) => {
+      if (payload.output) terminal.write(payload.output);
+    });
+    socket.on('terminal:status', (payload: { message?: string }) => {
+      if (payload.message) terminal.writeln(`\u001b[90m${payload.message}\u001b[0m`);
+    });
+    socket.on('terminal:error', (payload: { error?: string }) => {
+      setTerminalError(payload.error ?? 'Terminal request failed.');
+    });
+
+    return () => {
+      input.dispose();
+      observer.disconnect();
+      socket.disconnect();
+      terminalSocketRef.current = null;
+      terminal.dispose();
+    };
+  }, [isBottomPanelOpen, isViewer, terminalReconnectVersion, workspace?.status, workspaceId]);
+
+  useEffect(() => {
     if (workspace?.status === 'READY' && isGitPanelOpen) {
       void loadGitStatus();
     }
   }, [isGitPanelOpen, loadGitStatus, workspace?.status]);
 
   useEffect(() => {
-    if (!activeFilePath || activeFilePath !== editorPath || !editorInstance || !user) {
+    if (isViewer || !activeFilePath || activeFilePath !== editorPath || !editorInstance || !user) {
       return undefined;
     }
 
@@ -583,7 +792,7 @@ export function WorkspaceExplorer({ workspaceId }: { workspaceId: string }) {
       provider.destroy();
       setCollaborationStatus('Connect to a file to collaborate.');
     };
-  }, [activeFilePath, editorInstance, editorPath, user, workspaceId]);
+  }, [activeFilePath, editorInstance, editorPath, isViewer, user, workspaceId]);
 
   useEffect(() => {
     if (workspace?.status !== 'READY') return undefined;
@@ -736,6 +945,148 @@ export function WorkspaceExplorer({ workspaceId }: { workspaceId: string }) {
       );
     } finally {
       setIsInstallingDependencies(false);
+    }
+  }
+
+  function runTerminalTask(task: 'run' | 'test') {
+    setTerminalError(null);
+    if (!terminalSocketRef.current?.connected) {
+      setTerminalError('The shared terminal is reconnecting. Please wait a moment.');
+      return;
+    }
+    terminalSocketRef.current.emit('terminal:run', { task });
+  }
+
+  async function reconnectTerminal() {
+    setTerminalError(null);
+    await startRuntime();
+    setTerminalReconnectVersion((version) => version + 1);
+  }
+
+  async function performPreviewAction(action: 'launch' | 'stop') {
+    setPreviewAction(action);
+    setPreviewError(null);
+    try {
+      const payload = await requestJson(`/api/workspaces/${workspaceId}/preview`, {
+        method: action === 'launch' ? 'POST' : 'DELETE',
+      });
+      if (
+        typeof payload !== 'object' ||
+        payload === null ||
+        !('preview' in payload) ||
+        typeof payload.preview !== 'object' ||
+        payload.preview === null ||
+        !('status' in payload.preview)
+      ) {
+        throw new Error('The preview response was invalid.');
+      }
+      setPreview(payload.preview as Preview);
+    } catch (requestError) {
+      setPreviewError(
+        requestError instanceof Error ? requestError.message : 'Unable to update the preview.',
+      );
+    } finally {
+      setPreviewAction(null);
+    }
+  }
+
+  async function saveConfig() {
+    try {
+      setDataError(null);
+      await requestJson(`/api/workspaces/${workspaceId}/config`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key: configKey, value: configValue }),
+      });
+      setConfigKey('');
+      setConfigValue('');
+      await loadWorkspaceData();
+    } catch (e) {
+      setDataError(e instanceof Error ? e.message : 'Unable to save config.');
+    }
+  }
+  async function uploadDataset() {
+    if (!datasetFile) return;
+    try {
+      setDataError(null);
+      await requestJson(`/api/workspaces/${workspaceId}/datasets`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': datasetFile.type || 'application/octet-stream',
+          'X-Dataset-Name': datasetFile.name,
+        },
+        body: datasetFile,
+      });
+      setDatasetFile(null);
+      await loadWorkspaceData();
+    } catch (e) {
+      setDataError(e instanceof Error ? e.message : 'Unable to upload dataset.');
+    }
+  }
+  async function deleteDataset(id: string) {
+    try {
+      await requestJson(`/api/workspaces/${workspaceId}/datasets/${id}`, { method: 'DELETE' });
+      await loadWorkspaceData();
+    } catch (e) {
+      setDataError(e instanceof Error ? e.message : 'Unable to delete dataset.');
+    }
+  }
+  async function createBranch() {
+    try {
+      const payload = await requestJson(`/api/workspaces/${workspaceId}/branches`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ task: branchTask }),
+      });
+      if (typeof payload === 'object' && payload && 'branch' in payload) {
+        setBranchTask('');
+        await loadBranches();
+      }
+    } catch (e) {
+      setGitError(e instanceof Error ? e.message : 'Unable to create branch.');
+    }
+  }
+  async function showDiff(branch: TaskBranch) {
+    try {
+      const payload = await requestJson(
+        `/api/workspaces/${workspaceId}/branches/${branch.id}/diff`,
+      );
+      if (
+        typeof payload === 'object' &&
+        payload &&
+        'diff' in payload &&
+        typeof payload.diff === 'string'
+      )
+        setBranchDiff(payload.diff || 'No changes compared with main.');
+    } catch (e) {
+      setGitError(e instanceof Error ? e.message : 'Unable to load branch diff.');
+    }
+  }
+
+  async function performBranchAction(branch: TaskBranch, action: 'merge' | 'discard') {
+    const message =
+      action === 'merge'
+        ? `Merge ${branch.name} into main? The main workspace must be clean, and the task branch will be cleaned up after a successful merge.`
+        : `Discard ${branch.name}? Its worktree, preview, runtime, and unmerged changes will be removed.`;
+    if (!window.confirm(message)) return;
+
+    setBranchAction({ id: branch.id, action });
+    setGitError(null);
+    setGitNotice(null);
+    try {
+      await requestJson(
+        `/api/workspaces/${workspaceId}/branches/${branch.id}${action === 'merge' ? '/merge' : ''}`,
+        { method: action === 'merge' ? 'POST' : 'DELETE' },
+      );
+      setBranchDiff(null);
+      await Promise.all([loadBranches(), loadGitStatus()]);
+      setGitNotice(
+        action === 'merge' ? 'Branch merged into main.' : 'Branch discarded and cleaned up.',
+      );
+    } catch (e) {
+      setGitError(e instanceof Error ? e.message : `Unable to ${action} branch.`);
+    } finally {
+      setBranchAction(null);
     }
   }
 
@@ -1070,6 +1421,109 @@ export function WorkspaceExplorer({ workspaceId }: { workspaceId: string }) {
                       {gitStatus?.ahead ? ` · ↑${gitStatus.ahead}` : ''}
                       {gitStatus?.behind ? ` · ↓${gitStatus.behind}` : ''}
                     </p>
+                    {isViewer ? (
+                      <p className="mt-2 rounded border border-amber-400/40 bg-amber-400/10 p-2 text-amber-200">
+                        Viewer access — this workspace is read-only.
+                      </p>
+                    ) : null}
+                    <div className="mt-2 flex gap-2">
+                      <a
+                        className="rounded border border-[#6b655c] px-2 py-1 text-[10px] hover:border-cyan-400"
+                        href={`/api/workspaces/${workspaceId}/export`}
+                      >
+                        Export ZIP
+                      </a>
+                      <a
+                        className="rounded border border-[#6b655c] px-2 py-1 text-[10px] hover:border-cyan-400"
+                        href={`/api/workspaces/${workspaceId}/activity`}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        Activity JSON
+                      </a>
+                    </div>
+                  </div>
+                  <div className="border-b border-[#45413a] p-3 text-xs">
+                    <p className="font-semibold text-[#fbf1c7]">Task branches</p>
+                    <div className="mt-2 flex gap-1">
+                      <input
+                        className="min-w-0 flex-1 rounded border border-[#6b655c] bg-[#1c1b19] px-2 py-1"
+                        placeholder="task-name"
+                        value={branchTask}
+                        onChange={(event) => setBranchTask(event.target.value)}
+                      />
+                      <button
+                        className="rounded border border-[#6b655c] px-2 hover:border-cyan-400"
+                        type="button"
+                        disabled={isViewer || !branchTask.trim()}
+                        onClick={() => void createBranch()}
+                      >
+                        Create
+                      </button>
+                    </div>
+                    <button
+                      className="mt-2 text-[#d4bd99] hover:text-[#fbf1c7]"
+                      type="button"
+                      onClick={() => void loadBranches()}
+                    >
+                      Refresh branches
+                    </button>
+                    {branches.map((branch) => (
+                      <div key={branch.id} className="mt-1 flex gap-1">
+                        <button
+                          type="button"
+                          className="min-w-0 flex-1 truncate text-left text-[#d4bd99] hover:text-[#fbf1c7]"
+                          onClick={() => void showDiff(branch)}
+                        >
+                          {branch.name}
+                        </button>
+                        {branch.branchWorkspaceId ? (
+                          <button
+                            type="button"
+                            className="text-cyan-300"
+                            onClick={() =>
+                              window.location.assign(`/workspaces/${branch.branchWorkspaceId}`)
+                            }
+                          >
+                            Open
+                          </button>
+                        ) : null}
+                        {workspace.role === 'OWNER' ? (
+                          <>
+                            <button
+                              type="button"
+                              className="text-emerald-300 disabled:opacity-40"
+                              disabled={branchAction !== null}
+                              onClick={() => void performBranchAction(branch, 'merge')}
+                            >
+                              {branchAction?.id === branch.id && branchAction.action === 'merge'
+                                ? 'Merging…'
+                                : 'Merge'}
+                            </button>
+                            <button
+                              type="button"
+                              className="text-rose-300 disabled:opacity-40"
+                              disabled={branchAction !== null}
+                              onClick={() => void performBranchAction(branch, 'discard')}
+                            >
+                              {branchAction?.id === branch.id && branchAction.action === 'discard'
+                                ? 'Discarding…'
+                                : 'Discard'}
+                            </button>
+                          </>
+                        ) : null}
+                      </div>
+                    ))}
+                    {workspace.role !== 'OWNER' ? (
+                      <p className="mt-2 text-[10px] text-[#8e8373]">
+                        Only the workspace owner can merge or discard task branches.
+                      </p>
+                    ) : null}
+                    {branchDiff !== null ? (
+                      <pre className="mt-2 max-h-24 overflow-auto whitespace-pre-wrap text-[10px] text-[#a89984]">
+                        {branchDiff}
+                      </pre>
+                    ) : null}
                   </div>
                   <div className="border-b border-[#45413a] p-3">
                     <label className="sr-only" htmlFor="commit-message">
@@ -1086,7 +1540,7 @@ export function WorkspaceExplorer({ workspaceId }: { workspaceId: string }) {
                     <button
                       className="mt-2 w-full rounded bg-cyan-500 px-3 py-2 text-xs font-semibold text-slate-950 disabled:cursor-not-allowed disabled:bg-[#45413a] disabled:text-[#6b655c]"
                       type="button"
-                      disabled={gitAction !== null || !commitMessage.trim()}
+                      disabled={isViewer || gitAction !== null || !commitMessage.trim()}
                       onClick={() => void performGitAction('commit')}
                     >
                       {gitAction === 'commit' ? 'Committing…' : 'Commit all changes'}
@@ -1096,7 +1550,7 @@ export function WorkspaceExplorer({ workspaceId }: { workspaceId: string }) {
                     <button
                       className="flex-1 rounded border border-[#6b655c] px-2 py-2 text-xs hover:border-cyan-400 disabled:cursor-not-allowed disabled:text-[#8e8373]"
                       type="button"
-                      disabled={gitAction !== null}
+                      disabled={isViewer || gitAction !== null}
                       onClick={() => void performGitAction('pull')}
                     >
                       {gitAction === 'pull' ? 'Pulling…' : 'Pull'}
@@ -1109,7 +1563,7 @@ export function WorkspaceExplorer({ workspaceId }: { workspaceId: string }) {
                           ? 'Push to GitHub'
                           : 'Only the workspace owner can push'
                       }
-                      disabled={gitAction !== null || workspace.role !== 'OWNER'}
+                      disabled={isViewer || gitAction !== null || workspace.role !== 'OWNER'}
                       onClick={() => void performGitAction('push')}
                     >
                       {gitAction === 'push' ? 'Pushing…' : 'Push'}
@@ -1170,6 +1624,7 @@ export function WorkspaceExplorer({ workspaceId }: { workspaceId: string }) {
                     <button
                       className="grid h-7 flex-1 place-items-center rounded border border-[#6b655c] text-xs hover:border-cyan-400 hover:text-cyan-200"
                       type="button"
+                      disabled={isViewer}
                       onClick={() => void createEntry('directory', null)}
                     >
                       New folder
@@ -1177,6 +1632,7 @@ export function WorkspaceExplorer({ workspaceId }: { workspaceId: string }) {
                     <button
                       className="grid h-7 flex-1 place-items-center rounded bg-cyan-500 text-xs font-semibold text-slate-950 hover:bg-cyan-300"
                       type="button"
+                      disabled={isViewer}
                       onClick={() => void createEntry('file', null)}
                     >
                       New file
@@ -1253,7 +1709,7 @@ export function WorkspaceExplorer({ workspaceId }: { workspaceId: string }) {
                       key={activeTab.path}
                       height="100%"
                       language={activeTab.language}
-                      theme="mechanoonna"
+                      theme="together-warm-dark"
                       defaultValue={activeTab.content}
                       path={activeTab.path}
                       onMount={(editor) => {
@@ -1273,7 +1729,8 @@ export function WorkspaceExplorer({ workspaceId }: { workspaceId: string }) {
                           invisibleCharacters: false,
                           nonBasicASCII: false,
                         },
-                        readOnly: collaborationStatus !== 'Live collaboration connected.',
+                        readOnly:
+                          isViewer || collaborationStatus !== 'Live collaboration connected.',
                         scrollBeyondLastLine: false,
                         wordWrap: 'off',
                       }}
@@ -1290,7 +1747,7 @@ export function WorkspaceExplorer({ workspaceId }: { workspaceId: string }) {
                   )}
                 </div>
                 {isBottomPanelOpen ? (
-                  <section className="h-44 shrink-0 border-t border-[#45413a] bg-[#161412]">
+                  <section className="h-64 shrink-0 border-t border-[#45413a] bg-[#161412]">
                     <div className="flex h-9 items-center gap-5 border-b border-[#45413a] px-4 text-[11px] font-semibold uppercase tracking-wider text-[#d4bd99]">
                       <span>Problems</span>
                       <span>Output</span>
@@ -1299,10 +1756,11 @@ export function WorkspaceExplorer({ workspaceId }: { workspaceId: string }) {
                       </span>
                       <span>Ports</span>
                     </div>
-                    <div className="flex h-[8.75rem] items-center justify-between gap-6 overflow-auto p-4 text-xs text-[#d4bd99]">
-                      <div>
+                    <div className="flex h-[12.75rem] min-h-0">
+                      <div ref={terminalHostRef} className="min-w-0 flex-1 overflow-hidden p-3" />
+                      <aside className="w-52 shrink-0 overflow-y-auto border-l border-[#45413a] p-3 text-xs text-[#d4bd99]">
                         <p className="font-semibold text-[#fbf1c7]">
-                          Shared runtime:{' '}
+                          Runtime:{' '}
                           <span
                             className={
                               runtime?.status === 'RUNNING' ? 'text-emerald-300' : 'text-amber-200'
@@ -1311,28 +1769,168 @@ export function WorkspaceExplorer({ workspaceId }: { workspaceId: string }) {
                             {runtime?.status.toLowerCase() ?? 'starting'}
                           </span>
                         </p>
-                        <p className="mt-2">Dependencies: {runtime?.dependencies ?? 'checking'}</p>
-                        <p className="mt-2 text-[#a89984]">
-                          This workspace runtime is shared by the team and stops after inactivity.
-                        </p>
-                        {runtimeError ? <p className="mt-2 text-rose-300">{runtimeError}</p> : null}
-                        {runtimeNotice ? (
-                          <p className="mt-2 text-emerald-300">{runtimeNotice}</p>
-                        ) : null}
-                      </div>
-                      <div className="shrink-0 text-right">
+                        <p className="mt-1">Dependencies: {runtime?.dependencies ?? 'checking'}</p>
+                        <div className="mt-2 border-y border-[#45413a] py-2">
+                          <p className="font-semibold text-[#fbf1c7]">Datasets</p>
+                          <label className="mt-1 block w-full cursor-pointer rounded border border-[#6b655c] px-2 py-1.5 text-center text-[10px] font-semibold hover:border-cyan-400">
+                            {datasetFile ? datasetFile.name : 'Choose dataset file'}
+                            <input
+                              className="sr-only"
+                              type="file"
+                              onChange={(event) => setDatasetFile(event.target.files?.[0] ?? null)}
+                            />
+                          </label>
+                          <button
+                            className="mt-1 w-full rounded border border-[#6b655c] px-2 py-1.5 text-[10px] font-semibold hover:border-cyan-400 disabled:cursor-not-allowed disabled:opacity-40"
+                            type="button"
+                            disabled={isViewer || !datasetFile}
+                            onClick={() => void uploadDataset()}
+                          >
+                            Upload selected file
+                          </button>
+                        </div>
+                        <p className="mt-2 text-[#a89984]">{terminalStatus}</p>
+                        <div className="mt-3 grid grid-cols-2 gap-2">
+                          <button
+                            className="rounded border border-[#6b655c] px-2 py-1.5 font-semibold hover:border-cyan-400 disabled:opacity-40"
+                            type="button"
+                            disabled={isViewer || !terminalTasks.run}
+                            onClick={() => runTerminalTask('run')}
+                          >
+                            Run
+                          </button>
+                          <button
+                            className="rounded border border-[#6b655c] px-2 py-1.5 font-semibold hover:border-cyan-400 disabled:opacity-40"
+                            type="button"
+                            disabled={isViewer || !terminalTasks.test}
+                            onClick={() => runTerminalTask('test')}
+                          >
+                            Test
+                          </button>
+                        </div>
                         <button
-                          className="rounded border border-[#6b655c] px-3 py-2 font-semibold text-[#fbf1c7] hover:border-cyan-400 disabled:cursor-not-allowed disabled:text-[#6b655c]"
+                          className="mt-2 w-full rounded border border-[#6b655c] px-2 py-1.5 font-semibold hover:border-cyan-400 disabled:opacity-40"
                           type="button"
-                          disabled={isInstallingDependencies || runtime?.status !== 'RUNNING'}
+                          disabled={
+                            isViewer || isInstallingDependencies || runtime?.status !== 'RUNNING'
+                          }
                           onClick={() => void installDependencies()}
                         >
                           {isInstallingDependencies ? 'Installing…' : 'Install dependencies'}
                         </button>
-                        <p className="mt-2 max-w-52 text-[11px] text-[#8e8373]">
-                          Interactive terminal commands arrive in the next Phase 2 step.
+                        <button
+                          className="mt-2 w-full rounded border border-[#6b655c] px-2 py-1.5 font-semibold hover:border-cyan-400"
+                          type="button"
+                          disabled={isViewer}
+                          onClick={() => void reconnectTerminal()}
+                        >
+                          Start / reconnect terminal
+                        </button>
+                        <div className="mt-3 border-t border-[#45413a] pt-2">
+                          <p className="font-semibold text-[#fbf1c7]">Branch preview</p>
+                          {workspace.defaultBranch.startsWith('together/') ? (
+                            <>
+                              <p className="mt-1 text-[10px] text-[#a89984]">
+                                {preview?.status.toLowerCase() ?? 'stopped'} · isolated container
+                              </p>
+                              <button
+                                className="mt-2 w-full rounded border border-[#6b655c] px-2 py-1.5 text-[10px] font-semibold hover:border-cyan-400 disabled:opacity-40"
+                                type="button"
+                                disabled={isViewer || previewAction !== null}
+                                onClick={() => void performPreviewAction('launch')}
+                              >
+                                {previewAction === 'launch' ? 'Launching…' : 'Launch preview'}
+                              </button>
+                              {preview?.url ? (
+                                <button
+                                  className="mt-1 w-full rounded border border-cyan-400 px-2 py-1.5 text-[10px] font-semibold text-cyan-100"
+                                  type="button"
+                                  onClick={() =>
+                                    window.open(preview.url, '_blank', 'noopener,noreferrer')
+                                  }
+                                >
+                                  Open preview
+                                </button>
+                              ) : null}
+                              {preview?.status === 'RUNNING' ? (
+                                <button
+                                  className="mt-1 w-full rounded border border-[#6b655c] px-2 py-1.5 text-[10px] font-semibold hover:border-rose-300 disabled:opacity-40"
+                                  type="button"
+                                  disabled={isViewer || previewAction !== null}
+                                  onClick={() => void performPreviewAction('stop')}
+                                >
+                                  {previewAction === 'stop' ? 'Stopping…' : 'Stop preview'}
+                                </button>
+                              ) : null}
+                            </>
+                          ) : (
+                            <p className="mt-1 text-[10px] text-[#8e8373]">
+                              Create and open a task branch to launch an isolated preview.
+                            </p>
+                          )}
+                          {previewError || preview?.error ? (
+                            <p className="mt-2 text-rose-300">{previewError ?? preview?.error}</p>
+                          ) : null}
+                        </div>
+                        {runtimeError ? <p className="mt-2 text-rose-300">{runtimeError}</p> : null}
+                        {terminalError ? (
+                          <p className="mt-2 text-rose-300">{terminalError}</p>
+                        ) : null}
+                        {runtimeNotice ? (
+                          <p className="mt-2 text-emerald-300">{runtimeNotice}</p>
+                        ) : null}
+                        <p className="mt-2 text-[10px] text-[#8e8373]">
+                          Run/Test use package scripts or safe command arrays in together.json.
                         </p>
-                      </div>
+                        <div className="mt-3 border-t border-[#45413a] pt-2">
+                          <p className="font-semibold text-[#fbf1c7]">Shared config</p>
+                          <input
+                            className="mt-1 w-full rounded border border-[#6b655c] bg-[#1c1b19] p-1 text-[10px]"
+                            placeholder="KEY_NAME"
+                            value={configKey}
+                            onChange={(event) => setConfigKey(event.target.value.toUpperCase())}
+                          />
+                          <input
+                            className="mt-1 w-full rounded border border-[#6b655c] bg-[#1c1b19] p-1 text-[10px]"
+                            type="password"
+                            placeholder="Secret value"
+                            value={configValue}
+                            onChange={(event) => setConfigValue(event.target.value)}
+                          />
+                          <button
+                            className="mt-1 w-full rounded border border-[#6b655c] px-2 py-1 text-[10px]"
+                            type="button"
+                            disabled={isViewer || !configKey || !configValue}
+                            onClick={() => void saveConfig()}
+                          >
+                            Save encrypted
+                          </button>
+                          {configKeys.length ? (
+                            <p className="mt-1 truncate text-[10px] text-[#a89984]">
+                              {configKeys.join(', ')}
+                            </p>
+                          ) : null}
+                        </div>
+                        <div className="mt-3 border-t border-[#45413a] pt-2">
+                          <p className="font-semibold text-[#fbf1c7]">Datasets</p>
+                          {datasets.map((dataset) => (
+                            <div key={dataset.id} className="mt-1 flex gap-1 text-[10px]">
+                              <span className="min-w-0 flex-1 truncate">
+                                {dataset.originalName}
+                              </span>
+                              <button
+                                type="button"
+                                className="text-rose-300"
+                                disabled={isViewer}
+                                onClick={() => void deleteDataset(dataset.id)}
+                              >
+                                Delete
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                        {dataError ? <p className="mt-2 text-rose-300">{dataError}</p> : null}
+                      </aside>
                     </div>
                   </section>
                 ) : null}
@@ -1402,7 +2000,7 @@ export function WorkspaceExplorer({ workspaceId }: { workspaceId: string }) {
                   <button
                     className="mt-2 self-end rounded bg-cyan-500 px-3 py-2 text-xs font-semibold text-slate-950 hover:bg-cyan-300 disabled:cursor-not-allowed disabled:bg-[#45413a] disabled:text-[#6b655c]"
                     type="button"
-                    disabled={!isChatConnected || !chatInput.trim()}
+                    disabled={isViewer || !isChatConnected || !chatInput.trim()}
                     onClick={sendChat}
                   >
                     Send
@@ -1414,7 +2012,7 @@ export function WorkspaceExplorer({ workspaceId }: { workspaceId: string }) {
         ) : null}
       </section>
 
-      {contextMenu ? (
+      {!isViewer && contextMenu ? (
         <div
           className="fixed z-10 min-w-44 rounded-md border border-slate-700 bg-slate-900 p-1 shadow-2xl"
           style={{ left: contextMenu.x, top: contextMenu.y }}

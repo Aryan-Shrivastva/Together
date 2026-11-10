@@ -13,7 +13,7 @@ Together is a browser-based, real-time collaborative development workspace for s
 - Docker Compose startup with PostgreSQL, the API server, and the browser client.
 - A per-workspace restricted Node/Python runtime that starts on workspace open and can install detected dependencies once for the team.
 
-Interactive terminals, run/test controls, branches, previews, datasets, and export are introduced in later Phase 2 steps.
+The shared terminal and detected Run/Test commands are available inside a workspace. Branches, previews, datasets, and export are introduced in later Phase 2 steps.
 
 ## Prerequisites
 
@@ -45,6 +45,25 @@ For an ngrok or other public HTTPS tunnel, replace both GitHub App URLs and both
 
 Never commit `.env` or share client secrets, JWT secrets, encryption keys, OAuth codes, or GitHub access tokens.
 
+## Production deployment
+
+Production uses the separate hardened compose file. Copy `.env.production.example` to `.env.production`, replace every placeholder with unique secret values, point `PUBLIC_HOST` and `PUBLIC_ORIGIN` at a DNS name for this server, and register the HTTPS GitHub callback URL. Caddy obtains and renews the TLS certificate automatically.
+
+```powershell
+Copy-Item .env.production.example .env.production
+docker compose --env-file .env.production -f docker-compose.production.yml up -d --build
+```
+
+The production gateway is the only published application service. PostgreSQL, MinIO, the API, and the static client stay on private Docker networks; workspace containers receive their own internal network, resource limits, read-only root filesystem, dropped capabilities, and no Docker socket. The API server talks to a restricted Docker API proxy rather than mounting the Docker socket directly.
+
+Create encrypted/off-host backups from the deployment host with:
+
+```powershell
+./scripts/backup.ps1
+```
+
+Protect the backup directory like the database: it contains workspace source and database records. Test restore procedures separately before relying on a backup for recovery.
+
 ## Start the application
 
 ```powershell
@@ -52,6 +71,21 @@ docker compose up --build
 ```
 
 Open `http://localhost:5173`. The client builds once when the container starts, then serves optimized static assets. The API is available through the client proxy, so users only need the browser URL.
+
+## Shared terminal and tasks
+
+The Terminal panel opens one shell inside the workspace's restricted Docker runtime. Every workspace member sees its output and can type into the same shell; commands never execute on the Together server or host machine.
+
+Run and Test buttons are detected from `package.json` (`dev` or `start` for Run, `test` for Test). A repository can override them with safe command arrays in a root-level `together.json`:
+
+```json
+{
+  "run": ["npm", "run", "dev"],
+  "test": ["npm", "test"]
+}
+```
+
+Only workspace members can attach, send input, or receive terminal output. Output history is capped in memory so a noisy command cannot grow the server indefinitely.
 
 To stop services while keeping the database and workspace volume:
 
@@ -74,6 +108,18 @@ The OAuth token is stored encrypted on the server and is never sent to the brows
 Opening a ready workspace starts (or reuses) its dedicated Node/Python container. The bottom panel reports its status and offers **Install dependencies** when it detects `package.json`, `requirements.txt`, or `pyproject.toml`. The runtime has CPU, memory, process, filesystem, and per-workspace network limits; it stops after inactivity.
 
 Interactive terminal commands and shared command output are the next Phase 2 step.
+
+## Branch previews
+
+Open a temporary task branch, install its dependencies, then use **Launch preview** in the Terminal panel. Together starts a separate restricted container for that branch and opens it through an authenticated `/preview/...` URL. The preview has its own network and working copy, so it cannot change the main workspace. It stops automatically after inactivity or when **Stop preview** is selected.
+
+For projects that do not use the default Vite development server, add a root-level `together.json` with a safe argument-array command and port:
+
+```json
+{
+  "preview": { "command": ["python3", "-m", "http.server", "8000", "--bind", "0.0.0.0"], "port": 8000 }
+}
+```
 
 ## Mid-sem demo script
 

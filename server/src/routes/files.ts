@@ -5,8 +5,8 @@ import { HttpError } from '../errors/httpError.js';
 import { fileService } from '../services/fileService.js';
 import { membershipService } from '../services/membershipService.js';
 import { emitFileSystemChanged } from '../sockets/workspaceSockets.js';
+import { workspaceIdSchema } from '../validation/workspace.js';
 
-const workspaceIdSchema = z.string().uuid();
 const filePathSchema = z.string().min(1).max(1_024);
 const createFileSchema = z
   .object({
@@ -62,7 +62,7 @@ fileRouter.post('/workspaces/:workspaceId/file', async (request, response, next)
     const workspaceId = workspaceIdSchema.parse(request.params.workspaceId);
     const input = createFileSchema.parse(request.body);
     const userId = getAuthenticatedUserId(request.authUser?.sub);
-    await membershipService.requireMember(workspaceId, userId);
+    await membershipService.requireEditor(workspaceId, userId);
     await fileService.create(workspaceId, input);
     emitFileSystemChanged(workspaceId);
 
@@ -77,7 +77,7 @@ fileRouter.patch('/workspaces/:workspaceId/file', async (request, response, next
     const workspaceId = workspaceIdSchema.parse(request.params.workspaceId);
     const input = moveFileSchema.parse(request.body);
     const userId = getAuthenticatedUserId(request.authUser?.sub);
-    await membershipService.requireMember(workspaceId, userId);
+    await membershipService.requireEditor(workspaceId, userId);
     await fileService.move(workspaceId, input.path, input.targetPath);
     emitFileSystemChanged(workspaceId);
 
@@ -92,7 +92,7 @@ fileRouter.delete('/workspaces/:workspaceId/file', async (request, response, nex
     const workspaceId = workspaceIdSchema.parse(request.params.workspaceId);
     const path = filePathSchema.parse(request.query.path);
     const userId = getAuthenticatedUserId(request.authUser?.sub);
-    await membershipService.requireMember(workspaceId, userId);
+    await membershipService.requireEditor(workspaceId, userId);
     await fileService.delete(workspaceId, path);
     emitFileSystemChanged(workspaceId);
 

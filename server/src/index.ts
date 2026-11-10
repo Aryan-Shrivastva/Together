@@ -15,15 +15,33 @@ import { chatRouter } from './routes/chat.js';
 import { gitRouter } from './routes/git.js';
 import { fileRouter } from './routes/files.js';
 import { runtimeRouter } from './routes/runtime.js';
+import { branchRouter } from './routes/branches.js';
+import { workspaceDataRouter } from './routes/workspaceData.js';
+import { previewProxyRouter, previewRouter } from './routes/previews.js';
 import { workspaceRouter } from './routes/workspaces.js';
+import { activityRouter } from './routes/activity.js';
+import { exportRouter } from './routes/export.js';
 import { collaborationService } from './services/collaborationService.js';
 import { runtimeService } from './services/runtimeService.js';
+import { previewService } from './services/previewService.js';
 import {
   initializeCollaborationSockets,
   initializeWorkspaceSockets,
 } from './sockets/workspaceSockets.js';
 
 const app = express();
+app.disable('x-powered-by');
+app.set('trust proxy', env.TRUST_PROXY);
+app.use((_request, response, next) => {
+  response.setHeader('X-Content-Type-Options', 'nosniff');
+  response.setHeader('X-Frame-Options', 'DENY');
+  response.setHeader('Referrer-Policy', 'no-referrer');
+  response.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+  if (env.NODE_ENV === 'production') {
+    response.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+  }
+  next();
+});
 
 function isHttpError(error: unknown): error is HttpError {
   if (error instanceof HttpError) {
@@ -63,11 +81,18 @@ app.use('/auth', authRateLimit, authRouter);
 
 app.use('/api', requireAuthentication);
 app.use('/api', workspaceRouter);
+app.use('/api', activityRouter);
+app.use('/api', exportRouter);
 app.use('/api', inviteRouter);
 app.use('/api', chatRouter);
 app.use('/api', gitRouter);
 app.use('/api', fileRouter);
 app.use('/api', runtimeRouter);
+app.use('/api', branchRouter);
+app.use('/api', previewRouter);
+app.use('/api/workspaces/:workspaceId/datasets', express.raw({ type: '*/*', limit: '100mb' }));
+app.use('/api', workspaceDataRouter);
+app.use('/preview', requireAuthentication, previewProxyRouter);
 app.get('/api/me', async (request, response, next) => {
   try {
     const userId = request.authUser?.sub;
@@ -147,6 +172,9 @@ httpServer.listen(env.SERVER_PORT, () => {
   console.info(`Server listening on port ${env.SERVER_PORT}`);
   void runtimeService.resumeIdleTimers().catch(() => {
     console.error('Workspace runtime idle recovery failed.');
+  });
+  void previewService.resumeIdleTimers().catch(() => {
+    console.error('Preview idle recovery failed.');
   });
 });
 

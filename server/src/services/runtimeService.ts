@@ -9,6 +9,8 @@ import { env } from '../config/env.js';
 import { prisma } from '../db/client.js';
 import { HttpError } from '../errors/httpError.js';
 import { workspaceService } from './workspaceService.js';
+import { workspaceDataService } from './workspaceDataService.js';
+import { createDockerClient } from './dockerClient.js';
 
 const RUNTIME_LABEL = 'together.runtime';
 const RUNTIME_NETWORK_LABEL = 'together.runtime-network';
@@ -22,6 +24,12 @@ type DependencyPlan = {
 function isDockerNotFound(error: unknown): boolean {
   return (
     typeof error === 'object' && error !== null && 'statusCode' in error && error.statusCode === 404
+  );
+}
+
+function isDockerNotModified(error: unknown): boolean {
+  return (
+    typeof error === 'object' && error !== null && 'statusCode' in error && error.statusCode === 304
   );
 }
 
@@ -41,8 +49,16 @@ function pythonDependenciesVolumeName(workspaceId: string): string {
   return `together-runtime-python-${workspaceId}`;
 }
 
+function npmCacheVolumeName(workspaceId: string): string {
+  return `together-runtime-npm-cache-${workspaceId}`;
+}
+
+function pipCacheVolumeName(workspaceId: string): string {
+  return `together-runtime-pip-cache-${workspaceId}`;
+}
+
 export class RuntimeService {
-  private readonly docker = new Docker({ socketPath: '/var/run/docker.sock' });
+  private readonly docker = createDockerClient();
   private readonly idleTimers = new Map<string, NodeJS.Timeout>();
 
   async resumeIdleTimers(): Promise<void> {
@@ -100,6 +116,7 @@ export class RuntimeService {
 
       const network = await this.ensureNetwork(workspaceId, runtime.dockerNetworkId);
       const sourcePath = await this.workspaceVolumePath(workspaceId);
+      const datasetsPath = await workspaceDataService.syncWorkspaceDatasets(workspaceId);
       const container = await this.docker.createContainer({
         name: runtimeName(workspaceId),
         Image: env.WORKSPACE_RUNTIME_IMAGE,
@@ -110,6 +127,9 @@ export class RuntimeService {
             `${sourcePath}:/workspace:rw`,
             `${nodeModulesVolumeName(workspaceId)}:/workspace/node_modules:rw`,
             `${pythonDependenciesVolumeName(workspaceId)}:/dependencies:rw`,
+            `${npmCacheVolumeName(workspaceId)}:/npm-cache:rw`,
+            `${pipCacheVolumeName(workspaceId)}:/pip-cache:rw`,
+            `${datasetsPath}:/datasets:ro`,
           ],
           NetworkMode: networkName(workspaceId),
           Memory: env.WORKSPACE_RUNTIME_MEMORY_MB * 1024 * 1024,
@@ -201,6 +221,71 @@ export class RuntimeService {
     }
   }
 
+  async getRunningContainerId(workspaceId: string): Promise<string> {
+    const runtime = await this.start(workspaceId);
+    const record = await prisma.workspaceRuntime.findUnique({ where: { workspaceId } });
+    if (runtime.status !== 'RUNNING' || !record?.dockerContainerId) {
+      throw new HttpError(503, 'The workspace runtime is not available.');
+    }
+    this.scheduleIdleStop(workspaceId);
+    return record.dockerContainerId;
+  }
+
+  touch(workspaceId: string): void {
+    this.scheduleIdleStop(workspaceId);
+  }
+
+  async stopAndCleanup(workspaceId: string): Promise<void> {
+    this.clearIdleTimer(workspaceId);
+    const runtime = await prisma.workspaceRuntime.findUnique({ where: { workspaceId } });
+    if (!runtime) return;
+
+    if (runtime.dockerContainerId) {
+      const container = this.docker.getContainer(runtime.dockerContainerId);
+      try {
+        await container.stop({ t: 10 });
+      } catch (error) {
+        if (!isDockerNotFound(error) && !isDockerNotModified(error)) throw error;
+      }
+      try {
+        await container.remove({ force: true });
+      } catch (error) {
+        if (!isDockerNotFound(error)) throw error;
+      }
+    }
+
+    if (runtime.dockerNetworkId) {
+      try {
+        await this.docker.getNetwork(runtime.dockerNetworkId).remove();
+      } catch (error) {
+        if (!isDockerNotFound(error)) throw error;
+      }
+    }
+
+    for (const volumeName of [
+      nodeModulesVolumeName(workspaceId),
+      pythonDependenciesVolumeName(workspaceId),
+      npmCacheVolumeName(workspaceId),
+      pipCacheVolumeName(workspaceId),
+    ]) {
+      try {
+        await this.docker.getVolume(volumeName).remove({ force: true });
+      } catch (error) {
+        if (!isDockerNotFound(error)) throw error;
+      }
+    }
+
+    await prisma.workspaceRuntime.update({
+      where: { workspaceId },
+      data: {
+        dockerContainerId: null,
+        dockerNetworkId: null,
+        status: 'STOPPED',
+        dependencyFingerprint: null,
+      },
+    });
+  }
+
   private async findExistingContainer(
     containerReference: string,
   ): Promise<Docker.Container | null> {
@@ -257,8 +342,8 @@ export class RuntimeService {
       WorkingDir: '/workspace',
       Env: [
         'HOME=/tmp',
-        'NPM_CONFIG_CACHE=/tmp/.npm',
-        'PIP_CACHE_DIR=/tmp/.pip',
+        'NPM_CONFIG_CACHE=/npm-cache',
+        'PIP_CACHE_DIR=/pip-cache',
         'PYTHONPATH=/dependencies/python',
       ],
     });
@@ -363,6 +448,12 @@ export class RuntimeService {
       where: { workspaceId },
       data: { status: 'STOPPED' },
     });
+  }
+
+  private clearIdleTimer(workspaceId: string): void {
+    const current = this.idleTimers.get(workspaceId);
+    if (current) clearTimeout(current);
+    this.idleTimers.delete(workspaceId);
   }
 }
 

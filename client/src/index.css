@@ -1,54 +1,54 @@
 @import 'tailwindcss';
 
 /*
-  Mecha no Onna (メカの女) — HANCORE-linux/omarchy-mechanoonna-theme, V2.
-  Warm amber on a deep neutral ground, with frosted glass surfaces.
+  Together IDE: a quiet, warm-charcoal editor surface with cream type,
+  muted gold focus states, and red reserved for failures.
 */
 @theme {
   --font-sans: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
   --font-display: 'Cormorant Garamond', Georgia, serif;
 
-  --color-slate-950: #0e0b08;
-  --color-slate-900: #161412;
-  --color-slate-800: #232220;
-  --color-slate-700: #45413a;
-  --color-slate-600: #6b655c;
-  --color-slate-500: #8e8373;
-  --color-slate-400: #a89984;
-  --color-slate-300: #cbae8e;
-  --color-slate-200: #f0e4c5;
-  --color-slate-100: #fbf1c7;
-  --color-slate-50: #fff8e8;
+  --color-slate-950: #121110;
+  --color-slate-900: #1c1b1f;
+  --color-slate-800: #252321;
+  --color-slate-700: #443e39;
+  --color-slate-600: #6f655d;
+  --color-slate-500: #968777;
+  --color-slate-400: #b09b80;
+  --color-slate-300: #c6ac83;
+  --color-slate-200: #d8c3a0;
+  --color-slate-100: #ecd8b6;
+  --color-slate-50: #f7e9ce;
 
-  --color-cyan-50: #fff8e8;
-  --color-cyan-100: #fbf1c7;
-  --color-cyan-200: #f7df97;
-  --color-cyan-300: #e7c07c;
-  --color-cyan-400: #d4bd99;
-  --color-cyan-500: #c2a571;
-  --color-cyan-600: #a89984;
+  --color-cyan-50: #f7e9ce;
+  --color-cyan-100: #ecd8b6;
+  --color-cyan-200: #dfc492;
+  --color-cyan-300: #d3ae6d;
+  --color-cyan-400: #c6a062;
+  --color-cyan-500: #af874d;
+  --color-cyan-600: #92703f;
 
-  --color-rose-100: #f0e4c5;
-  --color-rose-200: #ebdbb2;
-  --color-rose-300: #d94e38;
-  --color-rose-400: #c5564a;
-  --color-rose-500: #c5564a;
+  --color-rose-100: #f2d1c8;
+  --color-rose-200: #dfaca0;
+  --color-rose-300: #c96656;
+  --color-rose-400: #b5483a;
+  --color-rose-500: #9f352c;
 
-  --color-emerald-200: #ebdbb2;
-  --color-emerald-300: #c2a571;
-  --color-emerald-400: #a89984;
-  --color-emerald-500: #a89984;
+  --color-emerald-200: #dce1c7;
+  --color-emerald-300: #b7c091;
+  --color-emerald-400: #929b70;
+  --color-emerald-500: #747e56;
 
-  --color-amber-100: #fff8e8;
-  --color-amber-200: #f7df97;
-  --color-amber-300: #e7c07c;
-  --color-amber-400: #d4bd99;
-  --color-amber-500: #c2a571;
+  --color-amber-100: #f7e9ce;
+  --color-amber-200: #dfc492;
+  --color-amber-300: #d3ae6d;
+  --color-amber-400: #c6a062;
+  --color-amber-500: #af874d;
 }
 
 :root {
-  color: #f0e4c5;
-  background: #0e0b08;
+  color: #d8c3a0;
+  background: #121110;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
 }
@@ -56,14 +56,12 @@
 body {
   margin: 0;
   min-height: 100vh;
-  background:
-    radial-gradient(ellipse 80% 50% at 10% -10%, rgba(231, 192, 124, 0.16), transparent 55%),
-    radial-gradient(ellipse 60% 40% at 100% 0%, rgba(212, 189, 153, 0.1), transparent 50%), #0e0b08;
+  background: #121110;
 }
 
 ::selection {
-  background: #706e6b;
-  color: #f0e4c5;
+  background: #554b43;
+  color: #f7e9ce;
 }
 
 .font-display {
@@ -71,8 +69,8 @@ body {
 }
 
 .glass {
-  background: rgba(28, 27, 25, 0.72);
-  border: 1px solid rgba(240, 228, 197, 0.12);
-  box-shadow: 0 24px 80px rgba(14, 11, 8, 0.45);
+  background: rgba(37, 35, 33, 0.88);
+  border: 1px solid rgba(216, 195, 160, 0.13);
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.32);
   backdrop-filter: blur(18px);
 }

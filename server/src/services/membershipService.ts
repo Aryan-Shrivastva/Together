@@ -25,7 +25,17 @@ export class MembershipService {
     const membership = await this.requireMember(workspaceId, userId);
 
     if (membership.role !== 'OWNER') {
-      throw new HttpError(403, 'Only the workspace owner can manage invites.');
+      throw new HttpError(403, 'Only the workspace owner can perform this action.');
+    }
+
+    return membership;
+  }
+
+  async requireEditor(workspaceId: string, userId: string): Promise<WorkspaceMembership> {
+    const membership = await this.requireMember(workspaceId, userId);
+
+    if (membership.role === 'VIEWER') {
+      throw new HttpError(403, 'Viewers cannot edit this workspace.');
     }
 
     return membership;

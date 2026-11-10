@@ -9,8 +9,8 @@ import { HttpError } from '../errors/httpError.js';
 import { cloneService } from '../services/cloneService.js';
 import { gitHubService } from '../services/githubService.js';
 import { workspaceService } from '../services/workspaceService.js';
+import { workspaceIdSchema } from '../validation/workspace.js';
 
-const workspaceIdSchema = z.string().uuid();
 const createWorkspaceSchema = z
   .object({
     repoFullName: z.string().regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/),
@@ -26,7 +26,7 @@ function toWorkspaceResponse(
     status: 'CLONING' | 'READY' | 'ERROR';
     createdAt: Date;
   },
-  role: 'OWNER' | 'COLLABORATOR',
+  role: 'OWNER' | 'COLLABORATOR' | 'VIEWER',
 ) {
   return {
     id: workspace.id,

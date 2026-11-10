@@ -15,6 +15,19 @@ services:
       timeout: 5s
       retries: 10
 
+  minio:
+    image: ghcr.io/intikhab49/minio-from-source:latest
+    profiles: ['datasets']
+    command: server /data --console-address ':9001'
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-togetherminio}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-togetherminio-secret}
+    ports:
+      - '${MINIO_PORT:-9000}:9000'
+      - '9001:9001'
+    volumes:
+      - minio_data:/data
+
   server:
     build:
       context: .
@@ -36,6 +49,15 @@ services:
       WORKSPACE_RUNTIME_CPU_COUNT: ${WORKSPACE_RUNTIME_CPU_COUNT:-1}
       WORKSPACE_RUNTIME_PIDS_LIMIT: ${WORKSPACE_RUNTIME_PIDS_LIMIT:-128}
       WORKSPACE_RUNTIME_IDLE_MS: ${WORKSPACE_RUNTIME_IDLE_MS:-900000}
+      PREVIEW_IDLE_MS: ${PREVIEW_IDLE_MS:-900000}
+      MINIO_ENDPOINT: minio
+      MINIO_PORT: 9000
+      MINIO_USE_SSL: 'false'
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-togetherminio}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-togetherminio-secret}
+      MINIO_BUCKET: ${MINIO_BUCKET:-together-datasets}
+      MAX_DATASET_BYTES: ${MAX_DATASET_BYTES:-104857600}
+      MAX_EXPORT_BYTES: ${MAX_EXPORT_BYTES:-268435456}
       DATABASE_URL: postgresql://${POSTGRES_USER:-together}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-together}?schema=public
       GITHUB_CLIENT_ID: ${GITHUB_CLIENT_ID:-}
       GITHUB_CLIENT_SECRET: ${GITHUB_CLIENT_SECRET:-}
@@ -87,3 +109,4 @@ volumes:
   root_node_modules:
   workspace_data:
     name: ${WORKSPACE_VOLUME_NAME:-together_workspace_data}
+  minio_data:

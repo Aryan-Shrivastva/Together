@@ -16,6 +16,7 @@ export default defineConfig(({ mode }) => {
     '/health': proxyTarget,
     '/auth': proxyTarget,
     '/api': proxyTarget,
+    '/preview': proxyTarget,
     '/socket.io': {
       target: proxyTarget,
       ws: true,

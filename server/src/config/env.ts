@@ -17,6 +17,44 @@ const applicationEnvironmentSchema = z.object({
   WORKSPACE_RUNTIME_CPU_COUNT: z.coerce.number().min(0.1).max(4).default(1),
   WORKSPACE_RUNTIME_PIDS_LIMIT: z.coerce.number().int().min(32).max(512).default(128),
   WORKSPACE_RUNTIME_IDLE_MS: z.coerce.number().int().min(60_000).max(3_600_000).default(900_000),
+  PREVIEW_IDLE_MS: z.coerce.number().int().min(60_000).max(3_600_000).default(900_000),
+  MINIO_ENDPOINT: z.string().min(1).default('minio'),
+  MINIO_PORT: z.coerce.number().int().min(1).max(65_535).default(9000),
+  MINIO_USE_SSL: z.coerce.boolean().default(false),
+  MINIO_ACCESS_KEY: z.string().min(8).optional(),
+  MINIO_SECRET_KEY: z.string().min(8).optional(),
+  MINIO_BUCKET: z
+    .string()
+    .regex(/^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/)
+    .default('together-datasets'),
+  MAX_DATASET_BYTES: z.coerce.number().int().min(1_024).max(536_870_912).default(104_857_600),
+  MAX_EXPORT_BYTES: z.coerce.number().int().min(1_048_576).max(1_073_741_824).default(268_435_456),
+  TRUST_PROXY: z.coerce.boolean().default(false),
+  DOCKER_HOST: z
+    .string()
+    .url()
+    .refine(
+      (value) =>
+        value.startsWith('tcp://') || value.startsWith('http://') || value.startsWith('https://'),
+    )
+    .optional(),
+}).superRefine((value, context) => {
+  if (value.NODE_ENV === 'production') {
+    if (new URL(value.CORS_ORIGIN).protocol !== 'https:') {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['CORS_ORIGIN'],
+        message: 'must use HTTPS in production',
+      });
+    }
+    if (!value.MINIO_ACCESS_KEY || !value.MINIO_SECRET_KEY) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['MINIO_SECRET_KEY'],
+        message: 'MinIO credentials are required in production',
+      });
+    }
+  }
 });
 
 const base64KeySchema = z.string().refine((value) => {
@@ -50,6 +88,13 @@ export function getAuthenticationConfig(): AuthenticationConfig {
   const result = authenticationEnvironmentSchema.safeParse(process.env);
 
   if (!result.success) {
+    throw new AuthenticationConfigurationError();
+  }
+
+  if (
+    env.NODE_ENV === 'production' &&
+    new URL(result.data.GITHUB_OAUTH_REDIRECT_URL).protocol !== 'https:'
+  ) {
     throw new AuthenticationConfigurationError();
   }
 
