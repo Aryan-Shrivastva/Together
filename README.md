@@ -15,6 +15,12 @@ Together is a browser-based, real-time collaborative development workspace for s
 
 The shared terminal and detected Run/Test commands are available inside a workspace. Branches, previews, datasets, and export are introduced in later Phase 2 steps.
 
+## Dependency change preview
+
+The dependency workflow currently operates as a read-only demonstration. It inspects declared npm and Python dependencies, checks npm/PyPI registry evidence, and presents a clear before → proposed version comparison, including the manifest file where each package was found. It does not edit source files or manifests, install packages, regenerate lockfiles, or create Git changes.
+
+In a ready workspace, open the Terminal panel and click **Install dependencies (preview)**. The app opens the **Dependencies** view automatically and shows the detected package changes. The preview is intentionally the visible proof that the agent can discover and evaluate dependencies; execution and approval can be enabled later without changing this comparison flow.
+
 ## Prerequisites
 
 - Docker Desktop with Docker Compose.
@@ -117,7 +123,10 @@ For projects that do not use the default Vite development server, add a root-lev
 
 ```json
 {
-  "preview": { "command": ["python3", "-m", "http.server", "8000", "--bind", "0.0.0.0"], "port": 8000 }
+  "preview": {
+    "command": ["python3", "-m", "http.server", "8000", "--bind", "0.0.0.0"],
+    "port": 8000
+  }
 }
 ```
 

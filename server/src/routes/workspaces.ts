@@ -9,6 +9,7 @@ import { HttpError } from '../errors/httpError.js';
 import { cloneService } from '../services/cloneService.js';
 import { gitHubService } from '../services/githubService.js';
 import { workspaceService } from '../services/workspaceService.js';
+import { membershipService } from '../services/membershipService.js';
 import { workspaceIdSchema } from '../validation/workspace.js';
 
 const createWorkspaceSchema = z
@@ -150,6 +151,23 @@ workspaceRouter.post('/workspaces', async (request, response, next) => {
     });
 
     cloneService.start(workspace.id);
+    response.status(202).json({ workspace: toWorkspaceResponse(workspace, 'OWNER') });
+  } catch (error) {
+    next(error);
+  }
+});
+
+workspaceRouter.post('/workspaces/:workspaceId/retry-clone', async (request, response, next) => {
+  try {
+    const userId = request.authUser?.sub;
+    const workspaceId = workspaceIdSchema.parse(request.params.workspaceId);
+    if (!userId) throw new HttpError(401, 'Authentication is required.');
+    await membershipService.requireOwner(workspaceId, userId);
+    await cloneService.retry(workspaceId);
+    const workspace = await prisma.workspace.findUnique({
+      where: { id: workspaceId },
+    });
+    if (!workspace) throw new HttpError(404, 'The workspace does not exist.');
     response.status(202).json({ workspace: toWorkspaceResponse(workspace, 'OWNER') });
   } catch (error) {
     next(error);

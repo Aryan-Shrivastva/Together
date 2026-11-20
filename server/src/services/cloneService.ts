@@ -17,8 +17,19 @@ export class CloneService {
   }
 
   start(workspaceId: string): void {
-    void this.clone(workspaceId).catch(() => {
-      console.error('Workspace cloning failed.');
+    void this.clone(workspaceId).catch((error) => {
+      const message =
+        error instanceof Error
+          ? error.message
+              .replace(/Authorization:\s*[^\r\n]*/gi, 'Authorization: <redacted>')
+              .replace(/https?:\/\/[^\s]+/gi, '<url>')
+              .slice(0, 300)
+          : 'Unknown clone error.';
+      console.error('Workspace cloning failed.', {
+        workspaceId,
+        name: error instanceof Error ? error.name : typeof error,
+        message,
+      });
     });
   }
 
@@ -46,32 +57,60 @@ export class CloneService {
         throw new Error('Workspace owner does not exist.');
       }
 
-      const config = getAuthenticationConfig();
-      const accessToken = decryptGitHubToken(
-        owner.githubAccessTokenEncrypted,
-        config.TOKEN_ENCRYPTION_KEY,
-      );
-      const authorization = Buffer.from(`x-access-token:${accessToken}`).toString('base64');
       const workspaceRoot = await workspaceService.prepareEmptyRoot(workspace.id);
-      const git = simpleGit({
-        timeout: { block: env.WORKSPACE_CLONE_TIMEOUT_MS },
-        unsafe: { allowUnsafeConfigEnvCount: true },
-      }).env({
-        GIT_CONFIG_COUNT: '1',
-        GIT_CONFIG_KEY_0: 'http.https://github.com/.extraheader',
-        GIT_CONFIG_VALUE_0: `Authorization: Basic ${authorization}`,
-      });
 
-      await git.clone(workspace.repoCloneUrl, workspaceRoot, ['--depth=1']);
+      try {
+        // Public repositories do not need the stored GitHub token. Trying this
+        // first also avoids a stale token blocking an otherwise valid clone.
+        await simpleGit({ timeout: { block: env.WORKSPACE_CLONE_TIMEOUT_MS } }).clone(
+          workspace.repoCloneUrl,
+          workspaceRoot,
+          ['--depth=1'],
+        );
+      } catch {
+        // Private repositories need the owner's token after the public attempt.
+        await workspaceService.removeRoot(workspace.id);
+        const privateWorkspaceRoot = await workspaceService.prepareEmptyRoot(workspace.id);
+        const config = getAuthenticationConfig();
+        const accessToken = decryptGitHubToken(
+          owner.githubAccessTokenEncrypted,
+          config.TOKEN_ENCRYPTION_KEY,
+        );
+        const authorization = Buffer.from(`x-access-token:${accessToken}`).toString('base64');
+        const authenticatedGit = simpleGit({
+          timeout: { block: env.WORKSPACE_CLONE_TIMEOUT_MS },
+          unsafe: { allowUnsafeConfigEnvCount: true },
+          allowEnvironment: ['GIT_CONFIG_COUNT', 'GIT_CONFIG_KEY_0', 'GIT_CONFIG_VALUE_0'],
+        }).env({
+          GIT_CONFIG_COUNT: '1',
+          GIT_CONFIG_KEY_0: 'http.https://github.com/.extraheader',
+          GIT_CONFIG_VALUE_0: `Authorization: Basic ${authorization}`,
+        });
+        await authenticatedGit.clone(workspace.repoCloneUrl, privateWorkspaceRoot, ['--depth=1']);
+      }
       await prisma.workspace.update({
         where: { id: workspace.id },
         data: { status: 'READY' },
       });
       this.errors.delete(workspace.id);
-    } catch {
+    } catch (error) {
       await this.markFailed(workspaceId);
-      throw new Error('Workspace cloning failed.');
+      throw error instanceof Error ? error : new Error('Workspace cloning failed.');
     }
+  }
+
+  async retry(workspaceId: string): Promise<void> {
+    const workspace = await prisma.workspace.findUnique({
+      where: { id: workspaceId },
+      select: { status: true },
+    });
+    if (!workspace) return;
+    if (workspace.status !== 'ERROR') {
+      throw new Error('Only failed workspace clones can be retried.');
+    }
+    this.errors.delete(workspaceId);
+    await prisma.workspace.update({ where: { id: workspaceId }, data: { status: 'CLONING' } });
+    this.start(workspaceId);
   }
 
   private async markFailed(workspaceId: string): Promise<void> {

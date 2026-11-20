@@ -71,6 +71,9 @@ services:
       - root_node_modules:/app/node_modules
       - workspace_data:/data/workspaces
       - /var/run/docker.sock:/var/run/docker.sock
+    command: >
+      sh -c "npm run prisma:generate --workspace @together/server &&
+      npm run dev --workspace @together/server"
     depends_on:
       postgres:
         condition: service_healthy

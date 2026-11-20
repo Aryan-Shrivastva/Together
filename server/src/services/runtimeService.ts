@@ -19,6 +19,14 @@ type DependencyPlan = {
   fingerprint: string;
   kind: 'node' | 'python-requirements' | 'python-project';
   command: string[];
+  manifest: string;
+  packages: DependencyPackage[];
+};
+
+export type DependencyPackage = {
+  name: string;
+  requested: string;
+  section: 'dependencies' | 'devDependencies' | 'requirements' | 'pyproject';
 };
 
 function isDockerNotFound(error: unknown): boolean {
@@ -71,13 +79,27 @@ export class RuntimeService {
 
   async getStatus(workspaceId: string) {
     const runtime = await prisma.workspaceRuntime.findUnique({ where: { workspaceId } });
+    const plan = await this.detectDependencies(workspaceId);
     if (!runtime) {
-      return { status: 'STOPPED' as const, dependencies: 'not detected' };
+      return {
+        status: 'STOPPED' as const,
+        dependencies: plan ? ('not installed' as const) : ('not detected' as const),
+        kind: plan?.kind,
+        manifest: plan?.manifest,
+        packages: plan?.packages ?? [],
+      };
     }
 
     return {
       status: runtime.status,
-      dependencies: runtime.dependencyFingerprint ? 'installed' : 'not installed',
+      dependencies: runtime.dependencyFingerprint
+        ? 'installed'
+        : plan
+          ? 'not installed'
+          : 'not detected',
+      kind: plan?.kind,
+      manifest: plan?.manifest,
+      packages: plan?.packages ?? [],
       error: runtime.lastError ?? undefined,
     };
   }
@@ -174,7 +196,7 @@ export class RuntimeService {
     }
   }
 
-  async installDependencies(workspaceId: string) {
+  async installDependencies(workspaceId: string, options: { lockfile?: boolean } = {}) {
     const plan = await this.detectDependencies(workspaceId);
     if (!plan) {
       return {
@@ -194,17 +216,55 @@ export class RuntimeService {
       return {
         installed: false,
         message: 'Dependencies are already installed for the current workspace files.',
+        kind: plan.kind,
+        manifest: plan.manifest,
+        packages: plan.packages,
+        durationMs: 0,
       };
     }
 
+    const startedAt = Date.now();
     try {
-      await this.runCommand(record.dockerContainerId, plan.command);
+      if (options.lockfile && plan.kind === 'node') {
+        const lockResult = await this.runCommand(record.dockerContainerId, [
+          'npm',
+          'install',
+          '--package-lock-only',
+          '--ignore-scripts',
+          '--no-audit',
+          '--no-fund',
+        ]);
+        if (lockResult.exitCode !== 0) throw new Error('Lockfile generation failed.');
+        const installResult = await this.runCommand(record.dockerContainerId, [
+          'npm',
+          'ci',
+          '--ignore-scripts',
+          '--no-audit',
+          '--no-fund',
+        ]);
+        if (installResult.exitCode !== 0) throw new Error('Dependency installation failed.');
+      } else {
+        const installResult = await this.runCommand(record.dockerContainerId, plan.command);
+        if (installResult.exitCode !== 0) throw new Error('Dependency installation failed.');
+      }
+      const installedPlan = (await this.detectDependencies(workspaceId)) ?? plan;
       await prisma.workspaceRuntime.update({
         where: { workspaceId },
-        data: { dependencyFingerprint: plan.fingerprint, lastError: null, status: 'RUNNING' },
+        data: {
+          dependencyFingerprint: installedPlan.fingerprint,
+          lastError: null,
+          status: 'RUNNING',
+        },
       });
       this.scheduleIdleStop(workspaceId);
-      return { installed: true, message: 'Dependencies installed in the shared runtime.' };
+      return {
+        installed: true,
+        message: 'Dependencies installed in the shared runtime.',
+        kind: plan.kind,
+        manifest: plan.manifest,
+        packages: plan.packages,
+        durationMs: Date.now() - startedAt,
+      };
     } catch {
       console.error('Workspace dependency installation failed.', { workspaceId, kind: plan.kind });
       await prisma.workspaceRuntime.update({
@@ -219,6 +279,47 @@ export class RuntimeService {
         'Dependency installation failed. Check the workspace files and retry.',
       );
     }
+  }
+
+  async runWorkspaceCommand(workspaceId: string, command: string[]) {
+    const runtime = await this.start(workspaceId);
+    const record = await prisma.workspaceRuntime.findUnique({ where: { workspaceId } });
+    if (runtime.status !== 'RUNNING' || !record?.dockerContainerId) {
+      throw new HttpError(503, 'The workspace runtime is not available.');
+    }
+    this.scheduleIdleStop(workspaceId);
+    return this.runCommand(record.dockerContainerId, command);
+  }
+
+  async verifyWorkspace(workspaceId: string) {
+    const plan = await this.detectDependencies(workspaceId);
+    if (!plan) {
+      return { success: true, commands: [], durationSeconds: 0 };
+    }
+    const commands =
+      plan.kind === 'node'
+        ? [
+            ['npm', 'run', 'build', '--if-present'],
+            ['npm', 'run', 'test', '--if-present'],
+            ['npm', 'run', 'typecheck', '--if-present'],
+          ]
+        : [['python3', '-m', 'compileall', '-q', '.']];
+    const startedAt = Date.now();
+    const results: Array<{ command: string; success: boolean; logTail: string }> = [];
+    for (const command of commands) {
+      const result = await this.runWorkspaceCommand(workspaceId, command);
+      results.push({
+        command: command.join(' '),
+        success: result.exitCode === 0,
+        logTail: result.logTail,
+      });
+      if (result.exitCode !== 0) break;
+    }
+    return {
+      success: results.length === commands.length && results.every((result) => result.success),
+      commands: results,
+      durationSeconds: (Date.now() - startedAt) / 1_000,
+    };
   }
 
   async getRunningContainerId(workspaceId: string): Promise<string> {
@@ -334,7 +435,10 @@ export class RuntimeService {
     return workspacePath;
   }
 
-  private async runCommand(containerId: string, command: string[]): Promise<void> {
+  private async runCommand(
+    containerId: string,
+    command: string[],
+  ): Promise<{ exitCode: number; logTail: string }> {
     const exec = await this.docker.getContainer(containerId).exec({
       Cmd: command,
       AttachStdout: true,
@@ -348,12 +452,14 @@ export class RuntimeService {
       ],
     });
     const stream = await exec.start({ hijack: true, stdin: false });
+    let output = '';
+    stream.on('data', (chunk: Buffer | string) => {
+      output = `${output}${chunk.toString()}`.slice(-12_000);
+    });
     stream.resume();
     await once(stream, 'end');
     const result = await exec.inspect();
-    if (result.ExitCode !== 0) {
-      throw new Error('Workspace command failed.');
-    }
+    return { exitCode: result.ExitCode ?? 0, logTail: output };
   }
 
   private async detectDependencies(workspaceId: string): Promise<DependencyPlan | null> {
@@ -375,10 +481,24 @@ export class RuntimeService {
       }
     });
     if (found.has('package.json')) {
+      const packages = this.readNodeDependencies(found.get('package.json') ?? '');
       return {
         kind: 'node',
-        command: found.has('package-lock.json') ? ['npm', 'ci'] : ['npm', 'install'],
+        command: [
+          'npm',
+          'install',
+          '--prefer-offline',
+          '--no-audit',
+          '--no-fund',
+          '--progress=false',
+          '--no-save',
+          '--package-lock=false',
+        ],
         fingerprint: this.fingerprint(found),
+        manifest: found.has('package-lock.json')
+          ? 'package.json + package-lock.json'
+          : 'package.json',
+        packages,
       };
     }
     if (found.has('requirements.txt')) {
@@ -389,22 +509,68 @@ export class RuntimeService {
           '-m',
           'pip',
           'install',
+          '--disable-pip-version-check',
+          '--no-input',
+          '--prefer-binary',
           '--target',
           '/dependencies/python',
           '-r',
           'requirements.txt',
         ],
         fingerprint: this.fingerprint(found),
+        manifest: 'requirements.txt',
+        packages: this.readRequirementsDependencies(found.get('requirements.txt') ?? ''),
       };
     }
     if (found.has('pyproject.toml')) {
       return {
         kind: 'python-project',
-        command: ['python3', '-m', 'pip', 'install', '--target', '/dependencies/python', '.'],
+        command: [
+          'python3',
+          '-m',
+          'pip',
+          'install',
+          '--disable-pip-version-check',
+          '--no-input',
+          '--prefer-binary',
+          '--target',
+          '/dependencies/python',
+          '.',
+        ],
         fingerprint: this.fingerprint(found),
+        manifest: 'pyproject.toml',
+        packages: [],
       };
     }
     return null;
+  }
+
+  private readNodeDependencies(content: string): DependencyPackage[] {
+    try {
+      const manifest = JSON.parse(content) as {
+        dependencies?: Record<string, string>;
+        devDependencies?: Record<string, string>;
+      };
+      return (['dependencies', 'devDependencies'] as const).flatMap((section) =>
+        Object.entries(manifest[section] ?? {})
+          .sort(([left], [right]) => left.localeCompare(right))
+          .map(([name, requested]) => ({ name, requested, section })),
+      );
+    } catch {
+      return [];
+    }
+  }
+
+  private readRequirementsDependencies(content: string): DependencyPackage[] {
+    return content
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter((line) => line && !line.startsWith('#') && !line.startsWith('-'))
+      .map((requested) => ({
+        name: (requested.split(/[<>=!~;\s]/)[0] ?? requested).split('[')[0] ?? requested,
+        requested,
+        section: 'requirements' as const,
+      }));
   }
 
   private fingerprint(files: Map<string, string>): string {

@@ -9,4 +9,6 @@ RUN apk add --no-cache git && npm ci
 
 COPY . .
 
+RUN npm run prisma:generate --workspace @together/server
+
 CMD ["npm", "run", "dev", "--workspace", "@together/server"]

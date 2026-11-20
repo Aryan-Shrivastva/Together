@@ -83,7 +83,47 @@ type GitStatusResponse = Omit<GitStatus, 'files'> & {
 type Runtime = {
   status: 'STOPPED' | 'STARTING' | 'RUNNING' | 'ERROR';
   dependencies: 'not detected' | 'not installed' | 'installed';
+  kind?: 'node' | 'python-requirements' | 'python-project';
+  manifest?: string;
+  packages?: DependencyPackage[];
   error?: string;
+};
+type DependencyPackage = {
+  name: string;
+  requested: string;
+  section: 'dependencies' | 'devDependencies' | 'requirements' | 'pyproject';
+};
+type DependencyInstallResult = {
+  installed: boolean;
+  message: string;
+  kind?: 'node' | 'python-requirements' | 'python-project';
+  manifest?: string;
+  packages?: DependencyPackage[];
+  durationMs?: number;
+};
+type DepForgeFinding = {
+  package: string;
+  ecosystem: 'pypi' | 'npm' | 'gradle';
+  current: string | null;
+  target: string | null;
+  status: 'ok' | 'outdated' | 'deprecated' | 'unpinned' | 'not_found' | 'needs_manual_review';
+  reason: string;
+  sourceFile: string;
+  recommendedAction: 'keep' | 'upgrade' | 'replace' | 'pin' | 'manual_review';
+};
+type DepForgeRun = {
+  runId: string;
+  repository: string;
+  stage:
+    'DISCOVER' | 'ANALYZE' | 'AWAIT_APPROVAL' | 'UPDATE' | 'INSTALL' | 'VERIFY' | 'REPORT' | 'DONE';
+  declaredDependencies: Array<{
+    name: string;
+    currentConstraint: string | null;
+    sourceFile: string;
+  }>;
+  findings: DepForgeFinding[];
+  createdAt: string;
+  updatedAt: string;
 };
 type TerminalTasks = { run: boolean; test: boolean };
 type Preview = {
@@ -188,7 +228,8 @@ function isRuntime(value: unknown): value is Runtime {
     'dependencies' in value &&
     (value.dependencies === 'not detected' ||
       value.dependencies === 'not installed' ||
-      value.dependencies === 'installed')
+      value.dependencies === 'installed') &&
+    (!('packages' in value) || Array.isArray(value.packages))
   );
 }
 
@@ -198,6 +239,25 @@ function toGitFileStatus(file: {
   working_dir: string;
 }): GitFileStatus {
   return { path: file.path, index: file.index, workingDirectory: file.working_dir };
+}
+
+function dependencyResultFromRuntime(runtime: Runtime): DependencyInstallResult | null {
+  if (!runtime.manifest) return null;
+  return {
+    installed: runtime.dependencies === 'installed',
+    message:
+      runtime.dependencies === 'installed'
+        ? 'Dependencies are in place in the shared runtime.'
+        : 'Dependencies detected. Install them to add them to the shared runtime.',
+    manifest: runtime.manifest,
+    packages: runtime.packages ?? [],
+    ...(runtime.kind ? { kind: runtime.kind } : {}),
+    ...(runtime.dependencies === 'installed' ? { durationMs: 0 } : {}),
+  };
+}
+
+function depforgeFindingKey(finding: Pick<DepForgeFinding, 'package' | 'sourceFile'>): string {
+  return `${finding.sourceFile}:${finding.package}`;
 }
 
 function gitFileBadge(file: GitFileStatus): string {
@@ -386,6 +446,9 @@ export function WorkspaceExplorer({ workspaceId }: { workspaceId: string }) {
   const [isExplorerOpen, setIsExplorerOpen] = useState(true);
   const [isGitPanelOpen, setIsGitPanelOpen] = useState(false);
   const [isBottomPanelOpen, setIsBottomPanelOpen] = useState(true);
+  const [activeBottomPanel, setActiveBottomPanel] = useState<'terminal' | 'output' | 'depforge'>(
+    'terminal',
+  );
   const [isCollaborationPanelOpen, setIsCollaborationPanelOpen] = useState(false);
   const [gitStatus, setGitStatus] = useState<GitStatus | null>(null);
   const [gitAction, setGitAction] = useState<'commit' | 'pull' | 'push' | null>(null);
@@ -394,11 +457,13 @@ export function WorkspaceExplorer({ workspaceId }: { workspaceId: string }) {
   const [commitMessage, setCommitMessage] = useState('');
   const [runtime, setRuntime] = useState<Runtime | null>(null);
   const [runtimeError, setRuntimeError] = useState<string | null>(null);
-  const [runtimeNotice, setRuntimeNotice] = useState<string | null>(null);
   const [preview, setPreview] = useState<Preview | null>(null);
   const [previewAction, setPreviewAction] = useState<'launch' | 'stop' | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
-  const [isInstallingDependencies, setIsInstallingDependencies] = useState(false);
+  const [dependencyResult, setDependencyResult] = useState<DependencyInstallResult | null>(null);
+  const [depforgeRun, setDepforgeRun] = useState<DepForgeRun | null>(null);
+  const [depforgeBusy, setDepforgeBusy] = useState(false);
+  const [depforgeError, setDepforgeError] = useState<string | null>(null);
   const [terminalStatus, setTerminalStatus] = useState('Connecting shared terminal…');
   const [terminalError, setTerminalError] = useState<string | null>(null);
   const [terminalTasks, setTerminalTasks] = useState<TerminalTasks>({ run: false, test: false });
@@ -557,6 +622,14 @@ export function WorkspaceExplorer({ workspaceId }: { workspaceId: string }) {
         throw new Error('The runtime response was invalid.');
       }
       setRuntime(payload.runtime);
+      const runtimeDependencyResult = dependencyResultFromRuntime(payload.runtime);
+      if (runtimeDependencyResult) {
+        setDependencyResult(runtimeDependencyResult);
+        if (payload.runtime.dependencies === 'installed') {
+          setActiveBottomPanel('output');
+          setIsBottomPanelOpen(true);
+        }
+      }
     } catch (requestError) {
       setRuntimeError(
         requestError instanceof Error
@@ -912,39 +985,35 @@ export function WorkspaceExplorer({ workspaceId }: { workspaceId: string }) {
   }
 
   async function installDependencies() {
-    setIsInstallingDependencies(true);
-    setRuntimeError(null);
-    setRuntimeNotice(null);
+    await startDepforgeAudit();
+  }
+
+  async function startDepforgeAudit() {
+    setDepforgeBusy(true);
+    setDepforgeError(null);
+    setActiveBottomPanel('depforge');
+    setIsBottomPanelOpen(true);
     try {
-      const payload = await requestJson(`/api/workspaces/${workspaceId}/runtime/install`, {
+      const payload = await requestJson(`/api/workspaces/${workspaceId}/depforge/runs`, {
         method: 'POST',
       });
       if (
         typeof payload !== 'object' ||
         payload === null ||
-        !('message' in payload) ||
-        typeof payload.message !== 'string'
+        !('run' in payload) ||
+        typeof payload.run !== 'object' ||
+        payload.run === null
       ) {
-        throw new Error('The dependency installation response was invalid.');
+        throw new Error('The dependency audit response was invalid.');
       }
-      setRuntimeNotice(payload.message);
-      const runtimePayload = await requestJson(`/api/workspaces/${workspaceId}/runtime`);
-      if (
-        typeof runtimePayload === 'object' &&
-        runtimePayload !== null &&
-        'runtime' in runtimePayload &&
-        isRuntime(runtimePayload.runtime)
-      ) {
-        setRuntime(runtimePayload.runtime);
-      }
+      const run = payload.run as DepForgeRun;
+      setDepforgeRun(run);
     } catch (requestError) {
-      setRuntimeError(
-        requestError instanceof Error
-          ? requestError.message
-          : 'Unable to install workspace dependencies.',
+      setDepforgeError(
+        requestError instanceof Error ? requestError.message : 'Dependency audit failed.',
       );
     } finally {
-      setIsInstallingDependencies(false);
+      setDepforgeBusy(false);
     }
   }
 
@@ -1750,188 +1819,354 @@ export function WorkspaceExplorer({ workspaceId }: { workspaceId: string }) {
                   <section className="h-64 shrink-0 border-t border-[#45413a] bg-[#161412]">
                     <div className="flex h-9 items-center gap-5 border-b border-[#45413a] px-4 text-[11px] font-semibold uppercase tracking-wider text-[#d4bd99]">
                       <span>Problems</span>
-                      <span>Output</span>
-                      <span className="border-b-2 border-cyan-300 py-[10px] text-[#fbf1c7]">
+                      <button
+                        className={
+                          activeBottomPanel === 'output'
+                            ? 'border-b-2 border-cyan-300 py-[10px] text-[#fbf1c7]'
+                            : 'py-[10px]'
+                        }
+                        type="button"
+                        onClick={() => setActiveBottomPanel('output')}
+                      >
+                        Output
+                      </button>
+                      <button
+                        className={
+                          activeBottomPanel === 'depforge'
+                            ? 'border-b-2 border-cyan-300 py-[10px] text-[#fbf1c7]'
+                            : 'py-[10px]'
+                        }
+                        type="button"
+                        onClick={() => setActiveBottomPanel('depforge')}
+                      >
+                        Dependencies
+                      </button>
+                      <button
+                        className={
+                          activeBottomPanel === 'terminal'
+                            ? 'border-b-2 border-cyan-300 py-[10px] text-[#fbf1c7]'
+                            : 'py-[10px]'
+                        }
+                        type="button"
+                        onClick={() => setActiveBottomPanel('terminal')}
+                      >
                         Terminal
-                      </span>
+                      </button>
                       <span>Ports</span>
                     </div>
-                    <div className="flex h-[12.75rem] min-h-0">
-                      <div ref={terminalHostRef} className="min-w-0 flex-1 overflow-hidden p-3" />
-                      <aside className="w-52 shrink-0 overflow-y-auto border-l border-[#45413a] p-3 text-xs text-[#d4bd99]">
-                        <p className="font-semibold text-[#fbf1c7]">
-                          Runtime:{' '}
-                          <span
-                            className={
-                              runtime?.status === 'RUNNING' ? 'text-emerald-300' : 'text-amber-200'
-                            }
-                          >
-                            {runtime?.status.toLowerCase() ?? 'starting'}
-                          </span>
-                        </p>
-                        <p className="mt-1">Dependencies: {runtime?.dependencies ?? 'checking'}</p>
-                        <div className="mt-2 border-y border-[#45413a] py-2">
-                          <p className="font-semibold text-[#fbf1c7]">Datasets</p>
-                          <label className="mt-1 block w-full cursor-pointer rounded border border-[#6b655c] px-2 py-1.5 text-center text-[10px] font-semibold hover:border-cyan-400">
-                            {datasetFile ? datasetFile.name : 'Choose dataset file'}
-                            <input
-                              className="sr-only"
-                              type="file"
-                              onChange={(event) => setDatasetFile(event.target.files?.[0] ?? null)}
-                            />
-                          </label>
-                          <button
-                            className="mt-1 w-full rounded border border-[#6b655c] px-2 py-1.5 text-[10px] font-semibold hover:border-cyan-400 disabled:cursor-not-allowed disabled:opacity-40"
-                            type="button"
-                            disabled={isViewer || !datasetFile}
-                            onClick={() => void uploadDataset()}
-                          >
-                            Upload selected file
-                          </button>
+                    {activeBottomPanel === 'depforge' ? (
+                      <div className="h-[12.75rem] overflow-y-auto p-4 text-xs text-[#d4bd99]">
+                        <div className="flex items-start justify-between gap-4">
+                          <div>
+                            <p className="font-semibold text-[#fbf1c7]">
+                              Dependency change preview
+                            </p>
+                            <p className="mt-1 text-[#a89984]">
+                              Before → proposed versions are shown for demonstration only. No files
+                              are edited and nothing is installed from this preview.
+                            </p>
+                          </div>
+                          {!depforgeRun || depforgeRun.stage === 'DONE' ? (
+                            <button
+                              className="shrink-0 rounded border border-cyan-400 px-2 py-1.5 text-[10px] font-semibold text-cyan-100 hover:bg-cyan-400/10 disabled:opacity-40"
+                              type="button"
+                              disabled={isViewer || depforgeBusy}
+                              onClick={() => void startDepforgeAudit()}
+                            >
+                              {depforgeBusy ? 'Working…' : 'Preview again'}
+                            </button>
+                          ) : null}
                         </div>
-                        <p className="mt-2 text-[#a89984]">{terminalStatus}</p>
-                        <div className="mt-3 grid grid-cols-2 gap-2">
-                          <button
-                            className="rounded border border-[#6b655c] px-2 py-1.5 font-semibold hover:border-cyan-400 disabled:opacity-40"
-                            type="button"
-                            disabled={isViewer || !terminalTasks.run}
-                            onClick={() => runTerminalTask('run')}
-                          >
-                            Run
-                          </button>
-                          <button
-                            className="rounded border border-[#6b655c] px-2 py-1.5 font-semibold hover:border-cyan-400 disabled:opacity-40"
-                            type="button"
-                            disabled={isViewer || !terminalTasks.test}
-                            onClick={() => runTerminalTask('test')}
-                          >
-                            Test
-                          </button>
+                        {depforgeRun ? (
+                          <>
+                            <p className="mt-2 text-[10px] text-[#8e8373]">
+                              {depforgeRun.repository} · Stage: {depforgeRun.stage} ·{' '}
+                              {depforgeRun.findings.length} findings
+                            </p>
+                            <div className="mt-2 overflow-x-auto rounded border border-[#45413a] bg-[#1c1b19]">
+                              <table className="w-full text-left text-[10px]">
+                                <thead className="text-[#fbf1c7]">
+                                  <tr>
+                                    <th className="p-2">Manifest</th>
+                                    <th className="p-2">Package</th>
+                                    <th className="p-2">Current → proposed</th>
+                                    <th className="p-2">Status</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {depforgeRun.findings.map((finding) => {
+                                    const key = depforgeFindingKey(finding);
+                                    return (
+                                      <tr key={key} className="border-t border-[#45413a]">
+                                        <td className="p-2 font-mono text-[#d4bd99]">
+                                          {finding.sourceFile}
+                                        </td>
+                                        <td className="p-2 font-mono text-cyan-200">
+                                          {finding.package}
+                                        </td>
+                                        <td className="p-2">
+                                          {finding.current ?? '—'} → {finding.target ?? '—'}
+                                        </td>
+                                        <td className="p-2">
+                                          <span className="text-amber-200">{finding.status}</span>
+                                          <span className="ml-1 text-[#a89984]">
+                                            {finding.reason}
+                                          </span>
+                                        </td>
+                                      </tr>
+                                    );
+                                  })}
+                                </tbody>
+                              </table>
+                            </div>
+                            <p className="mt-3 text-cyan-200">
+                              Preview only: no dependency files were changed.
+                            </p>
+                          </>
+                        ) : (
+                          <p className="mt-4 text-[#a89984]">
+                            Start a preview to compare the current and proposed dependency versions.
+                          </p>
+                        )}
+                        {depforgeError ? (
+                          <p className="mt-2 text-rose-300">{depforgeError}</p>
+                        ) : null}
+                      </div>
+                    ) : activeBottomPanel === 'output' ? (
+                      <div className="h-[12.75rem] overflow-y-auto p-4 text-xs text-[#d4bd99]">
+                        <div className="flex items-start justify-between gap-4">
+                          <div>
+                            <p className="font-semibold text-[#fbf1c7]">
+                              Dependency installation results
+                            </p>
+                            <p className="mt-1 text-[#a89984]">
+                              {dependencyResult?.message ??
+                                'Install dependencies to see the results.'}
+                            </p>
+                          </div>
+                          {dependencyResult?.durationMs !== undefined ? (
+                            <span className="shrink-0 text-emerald-300">
+                              {dependencyResult.durationMs === 0
+                                ? 'reused cached install'
+                                : `${(dependencyResult.durationMs / 1000).toFixed(1)}s`}
+                            </span>
+                          ) : null}
                         </div>
-                        <button
-                          className="mt-2 w-full rounded border border-[#6b655c] px-2 py-1.5 font-semibold hover:border-cyan-400 disabled:opacity-40"
-                          type="button"
-                          disabled={
-                            isViewer || isInstallingDependencies || runtime?.status !== 'RUNNING'
-                          }
-                          onClick={() => void installDependencies()}
-                        >
-                          {isInstallingDependencies ? 'Installing…' : 'Install dependencies'}
-                        </button>
-                        <button
-                          className="mt-2 w-full rounded border border-[#6b655c] px-2 py-1.5 font-semibold hover:border-cyan-400"
-                          type="button"
-                          disabled={isViewer}
-                          onClick={() => void reconnectTerminal()}
-                        >
-                          Start / reconnect terminal
-                        </button>
-                        <div className="mt-3 border-t border-[#45413a] pt-2">
-                          <p className="font-semibold text-[#fbf1c7]">Branch preview</p>
-                          {workspace.defaultBranch.startsWith('together/') ? (
-                            <>
-                              <p className="mt-1 text-[10px] text-[#a89984]">
-                                {preview?.status.toLowerCase() ?? 'stopped'} · isolated container
-                              </p>
-                              <button
-                                className="mt-2 w-full rounded border border-[#6b655c] px-2 py-1.5 text-[10px] font-semibold hover:border-cyan-400 disabled:opacity-40"
-                                type="button"
-                                disabled={isViewer || previewAction !== null}
-                                onClick={() => void performPreviewAction('launch')}
-                              >
-                                {previewAction === 'launch' ? 'Launching…' : 'Launch preview'}
-                              </button>
-                              {preview?.url ? (
-                                <button
-                                  className="mt-1 w-full rounded border border-cyan-400 px-2 py-1.5 text-[10px] font-semibold text-cyan-100"
-                                  type="button"
-                                  onClick={() =>
-                                    window.open(preview.url, '_blank', 'noopener,noreferrer')
-                                  }
-                                >
-                                  Open preview
-                                </button>
-                              ) : null}
-                              {preview?.status === 'RUNNING' ? (
-                                <button
-                                  className="mt-1 w-full rounded border border-[#6b655c] px-2 py-1.5 text-[10px] font-semibold hover:border-rose-300 disabled:opacity-40"
-                                  type="button"
-                                  disabled={isViewer || previewAction !== null}
-                                  onClick={() => void performPreviewAction('stop')}
-                                >
-                                  {previewAction === 'stop' ? 'Stopping…' : 'Stop preview'}
-                                </button>
-                              ) : null}
-                            </>
+                        {dependencyResult?.manifest ? (
+                          <p className="mt-2 text-[10px] text-[#8e8373]">
+                            Manifest: {dependencyResult.manifest} · The editor is showing the
+                            manifest file.
+                          </p>
+                        ) : null}
+                        <div className="mt-3 rounded border border-[#45413a] bg-[#1c1b19] p-2">
+                          <p className="mb-1 font-semibold text-[#fbf1c7]">
+                            {dependencyResult?.packages?.length ?? 0} declared dependencies
+                          </p>
+                          {dependencyResult?.packages?.length ? (
+                            <div className="max-h-28 overflow-y-auto font-mono text-[11px]">
+                              {dependencyResult.packages.map((dependency) => (
+                                <p key={`${dependency.section}:${dependency.name}`}>
+                                  <span className="text-cyan-200">{dependency.section}</span>:{' '}
+                                  {dependency.name} {dependency.requested}
+                                </p>
+                              ))}
+                            </div>
                           ) : (
-                            <p className="mt-1 text-[10px] text-[#8e8373]">
-                              Create and open a task branch to launch an isolated preview.
+                            <p className="text-[#a89984]">
+                              The installer completed, but this manifest did not contain direct
+                              dependency lines.
                             </p>
                           )}
-                          {previewError || preview?.error ? (
-                            <p className="mt-2 text-rose-300">{previewError ?? preview?.error}</p>
-                          ) : null}
                         </div>
-                        {runtimeError ? <p className="mt-2 text-rose-300">{runtimeError}</p> : null}
-                        {terminalError ? (
-                          <p className="mt-2 text-rose-300">{terminalError}</p>
-                        ) : null}
-                        {runtimeNotice ? (
-                          <p className="mt-2 text-emerald-300">{runtimeNotice}</p>
-                        ) : null}
-                        <p className="mt-2 text-[10px] text-[#8e8373]">
-                          Run/Test use package scripts or safe command arrays in together.json.
-                        </p>
-                        <div className="mt-3 border-t border-[#45413a] pt-2">
-                          <p className="font-semibold text-[#fbf1c7]">Shared config</p>
-                          <input
-                            className="mt-1 w-full rounded border border-[#6b655c] bg-[#1c1b19] p-1 text-[10px]"
-                            placeholder="KEY_NAME"
-                            value={configKey}
-                            onChange={(event) => setConfigKey(event.target.value.toUpperCase())}
-                          />
-                          <input
-                            className="mt-1 w-full rounded border border-[#6b655c] bg-[#1c1b19] p-1 text-[10px]"
-                            type="password"
-                            placeholder="Secret value"
-                            value={configValue}
-                            onChange={(event) => setConfigValue(event.target.value)}
-                          />
+                        <button
+                          className="mt-3 rounded border border-[#6b655c] px-3 py-1.5 text-[10px] font-semibold hover:border-cyan-400"
+                          type="button"
+                          onClick={() => setActiveBottomPanel('terminal')}
+                        >
+                          Back to terminal
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="flex h-[12.75rem] min-h-0">
+                        <div ref={terminalHostRef} className="min-w-0 flex-1 overflow-hidden p-3" />
+                        <aside className="w-52 shrink-0 overflow-y-auto border-l border-[#45413a] p-3 text-xs text-[#d4bd99]">
+                          <p className="font-semibold text-[#fbf1c7]">
+                            Runtime:{' '}
+                            <span
+                              className={
+                                runtime?.status === 'RUNNING'
+                                  ? 'text-emerald-300'
+                                  : 'text-amber-200'
+                              }
+                            >
+                              {runtime?.status.toLowerCase() ?? 'starting'}
+                            </span>
+                          </p>
+                          <p className="mt-1">
+                            Dependencies: {runtime?.dependencies ?? 'checking'}
+                          </p>
+                          <div className="mt-2 border-y border-[#45413a] py-2">
+                            <p className="font-semibold text-[#fbf1c7]">Datasets</p>
+                            <label className="mt-1 block w-full cursor-pointer rounded border border-[#6b655c] px-2 py-1.5 text-center text-[10px] font-semibold hover:border-cyan-400">
+                              {datasetFile ? datasetFile.name : 'Choose dataset file'}
+                              <input
+                                className="sr-only"
+                                type="file"
+                                onChange={(event) =>
+                                  setDatasetFile(event.target.files?.[0] ?? null)
+                                }
+                              />
+                            </label>
+                            <button
+                              className="mt-1 w-full rounded border border-[#6b655c] px-2 py-1.5 text-[10px] font-semibold hover:border-cyan-400 disabled:cursor-not-allowed disabled:opacity-40"
+                              type="button"
+                              disabled={isViewer || !datasetFile}
+                              onClick={() => void uploadDataset()}
+                            >
+                              Upload selected file
+                            </button>
+                          </div>
+                          <p className="mt-2 text-[#a89984]">{terminalStatus}</p>
+                          <div className="mt-3 grid grid-cols-2 gap-2">
+                            <button
+                              className="rounded border border-[#6b655c] px-2 py-1.5 font-semibold hover:border-cyan-400 disabled:opacity-40"
+                              type="button"
+                              disabled={isViewer || !terminalTasks.run}
+                              onClick={() => runTerminalTask('run')}
+                            >
+                              Run
+                            </button>
+                            <button
+                              className="rounded border border-[#6b655c] px-2 py-1.5 font-semibold hover:border-cyan-400 disabled:opacity-40"
+                              type="button"
+                              disabled={isViewer || !terminalTasks.test}
+                              onClick={() => runTerminalTask('test')}
+                            >
+                              Test
+                            </button>
+                          </div>
                           <button
-                            className="mt-1 w-full rounded border border-[#6b655c] px-2 py-1 text-[10px]"
+                            className="mt-2 w-full rounded border border-[#6b655c] px-2 py-1.5 font-semibold hover:border-cyan-400 disabled:opacity-40"
                             type="button"
-                            disabled={isViewer || !configKey || !configValue}
-                            onClick={() => void saveConfig()}
+                            disabled={isViewer || depforgeBusy || runtime?.status !== 'RUNNING'}
+                            onClick={() => void installDependencies()}
                           >
-                            Save encrypted
+                            {depforgeBusy ? 'Preparing preview…' : 'Install dependencies (preview)'}
                           </button>
-                          {configKeys.length ? (
-                            <p className="mt-1 truncate text-[10px] text-[#a89984]">
-                              {configKeys.join(', ')}
-                            </p>
+                          <button
+                            className="mt-2 w-full rounded border border-[#6b655c] px-2 py-1.5 font-semibold hover:border-cyan-400"
+                            type="button"
+                            disabled={isViewer}
+                            onClick={() => void reconnectTerminal()}
+                          >
+                            Start / reconnect terminal
+                          </button>
+                          <div className="mt-3 border-t border-[#45413a] pt-2">
+                            <p className="font-semibold text-[#fbf1c7]">Branch preview</p>
+                            {workspace.defaultBranch.startsWith('together/') ? (
+                              <>
+                                <p className="mt-1 text-[10px] text-[#a89984]">
+                                  {preview?.status.toLowerCase() ?? 'stopped'} · isolated container
+                                </p>
+                                <button
+                                  className="mt-2 w-full rounded border border-[#6b655c] px-2 py-1.5 text-[10px] font-semibold hover:border-cyan-400 disabled:opacity-40"
+                                  type="button"
+                                  disabled={isViewer || previewAction !== null}
+                                  onClick={() => void performPreviewAction('launch')}
+                                >
+                                  {previewAction === 'launch' ? 'Launching…' : 'Launch preview'}
+                                </button>
+                                {preview?.url ? (
+                                  <button
+                                    className="mt-1 w-full rounded border border-cyan-400 px-2 py-1.5 text-[10px] font-semibold text-cyan-100"
+                                    type="button"
+                                    onClick={() =>
+                                      window.open(preview.url, '_blank', 'noopener,noreferrer')
+                                    }
+                                  >
+                                    Open preview
+                                  </button>
+                                ) : null}
+                                {preview?.status === 'RUNNING' ? (
+                                  <button
+                                    className="mt-1 w-full rounded border border-[#6b655c] px-2 py-1.5 text-[10px] font-semibold hover:border-rose-300 disabled:opacity-40"
+                                    type="button"
+                                    disabled={isViewer || previewAction !== null}
+                                    onClick={() => void performPreviewAction('stop')}
+                                  >
+                                    {previewAction === 'stop' ? 'Stopping…' : 'Stop preview'}
+                                  </button>
+                                ) : null}
+                              </>
+                            ) : (
+                              <p className="mt-1 text-[10px] text-[#8e8373]">
+                                Create and open a task branch to launch an isolated preview.
+                              </p>
+                            )}
+                            {previewError || preview?.error ? (
+                              <p className="mt-2 text-rose-300">{previewError ?? preview?.error}</p>
+                            ) : null}
+                          </div>
+                          {runtimeError ? (
+                            <p className="mt-2 text-rose-300">{runtimeError}</p>
                           ) : null}
-                        </div>
-                        <div className="mt-3 border-t border-[#45413a] pt-2">
-                          <p className="font-semibold text-[#fbf1c7]">Datasets</p>
-                          {datasets.map((dataset) => (
-                            <div key={dataset.id} className="mt-1 flex gap-1 text-[10px]">
-                              <span className="min-w-0 flex-1 truncate">
-                                {dataset.originalName}
-                              </span>
-                              <button
-                                type="button"
-                                className="text-rose-300"
-                                disabled={isViewer}
-                                onClick={() => void deleteDataset(dataset.id)}
-                              >
-                                Delete
-                              </button>
-                            </div>
-                          ))}
-                        </div>
-                        {dataError ? <p className="mt-2 text-rose-300">{dataError}</p> : null}
-                      </aside>
-                    </div>
+                          {terminalError ? (
+                            <p className="mt-2 text-rose-300">{terminalError}</p>
+                          ) : null}
+                          <p className="mt-2 text-[10px] text-[#8e8373]">
+                            Run/Test use package scripts or safe command arrays in together.json.
+                          </p>
+                          <div className="mt-3 border-t border-[#45413a] pt-2">
+                            <p className="font-semibold text-[#fbf1c7]">Shared config</p>
+                            <input
+                              className="mt-1 w-full rounded border border-[#6b655c] bg-[#1c1b19] p-1 text-[10px]"
+                              placeholder="KEY_NAME"
+                              value={configKey}
+                              onChange={(event) => setConfigKey(event.target.value.toUpperCase())}
+                            />
+                            <input
+                              className="mt-1 w-full rounded border border-[#6b655c] bg-[#1c1b19] p-1 text-[10px]"
+                              type="password"
+                              placeholder="Secret value"
+                              value={configValue}
+                              onChange={(event) => setConfigValue(event.target.value)}
+                            />
+                            <button
+                              className="mt-1 w-full rounded border border-[#6b655c] px-2 py-1 text-[10px]"
+                              type="button"
+                              disabled={isViewer || !configKey || !configValue}
+                              onClick={() => void saveConfig()}
+                            >
+                              Save encrypted
+                            </button>
+                            {configKeys.length ? (
+                              <p className="mt-1 truncate text-[10px] text-[#a89984]">
+                                {configKeys.join(', ')}
+                              </p>
+                            ) : null}
+                          </div>
+                          <div className="mt-3 border-t border-[#45413a] pt-2">
+                            <p className="font-semibold text-[#fbf1c7]">Datasets</p>
+                            {datasets.map((dataset) => (
+                              <div key={dataset.id} className="mt-1 flex gap-1 text-[10px]">
+                                <span className="min-w-0 flex-1 truncate">
+                                  {dataset.originalName}
+                                </span>
+                                <button
+                                  type="button"
+                                  className="text-rose-300"
+                                  disabled={isViewer}
+                                  onClick={() => void deleteDataset(dataset.id)}
+                                >
+                                  Delete
+                                </button>
+                              </div>
+                            ))}
+                          </div>
+                          {dataError ? <p className="mt-2 text-rose-300">{dataError}</p> : null}
+                        </aside>
+                      </div>
+                    )}
                   </section>
                 ) : null}
               </section>

@@ -97,6 +97,7 @@ export function Dashboard() {
   const [selectedRepository, setSelectedRepository] = useState('');
   const [createError, setCreateError] = useState<string | null>(null);
   const [isCreating, setIsCreating] = useState(false);
+  const [retryingCloneWorkspaceId, setRetryingCloneWorkspaceId] = useState<string | null>(null);
   const [signOutError, setSignOutError] = useState<string | null>(null);
   const [invitesByWorkspace, setInvitesByWorkspace] = useState<Record<string, WorkspaceInvite>>({});
   const [inviteErrorsByWorkspace, setInviteErrorsByWorkspace] = useState<Record<string, string>>(
@@ -201,6 +202,18 @@ export function Dashboard() {
       setCreateError(error instanceof Error ? error.message : 'Unable to create workspace.');
     } finally {
       setIsCreating(false);
+    }
+  }
+
+  async function retryClone(workspaceId: string) {
+    setRetryingCloneWorkspaceId(workspaceId);
+    try {
+      await requestJson(`/api/workspaces/${workspaceId}/retry-clone`, { method: 'POST' });
+      await loadWorkspaces();
+    } catch (error) {
+      setWorkspaceError(error instanceof Error ? error.message : 'Unable to retry the clone.');
+    } finally {
+      setRetryingCloneWorkspaceId(null);
     }
   }
 
@@ -366,7 +379,21 @@ export function Dashboard() {
                   <p className="mt-4 text-sm text-cyan-300">Cloning repository…</p>
                 ) : null}
                 {workspace.errorMessage ? (
-                  <p className="mt-4 text-sm text-rose-300">{workspace.errorMessage}</p>
+                  <div className="mt-4">
+                    <p className="text-sm text-rose-300">{workspace.errorMessage}</p>
+                    {workspace.status === 'ERROR' && workspace.role === 'OWNER' ? (
+                      <button
+                        className="mt-3 rounded-md border border-cyan-400 px-3 py-2 text-sm font-semibold text-cyan-300 hover:bg-cyan-400 hover:text-slate-950 disabled:opacity-50"
+                        type="button"
+                        disabled={retryingCloneWorkspaceId === workspace.id}
+                        onClick={() => void retryClone(workspace.id)}
+                      >
+                        {retryingCloneWorkspaceId === workspace.id
+                          ? 'Retrying clone…'
+                          : 'Retry clone'}
+                      </button>
+                    ) : null}
+                  </div>
                 ) : null}
                 {workspace.status === 'READY' ? (
                   <div className="mt-4 flex items-center justify-between gap-3">
