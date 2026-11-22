@@ -70,8 +70,27 @@ model Workspace {
   preview       Preview?
   activityLogs  ActivityLog[]
   assistantMessages AssistantMessage[]
+  agentTasks AgentTask[]
 
   @@index([ownerId])
+}
+
+model AgentTask {
+  id String @id @default(cuid())
+  workspaceId String
+  userId String
+  username String
+  prompt String
+  status String @default("queued")
+  progress String @default("Waiting to start")
+  branchId String?
+  branchWorkspaceId String?
+  branchName String?
+  result String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  @@index([workspaceId, createdAt])
 }
 
 model AssistantMessage {

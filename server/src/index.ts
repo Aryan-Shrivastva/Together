@@ -23,6 +23,7 @@ import { activityRouter } from './routes/activity.js';
 import { exportRouter } from './routes/export.js';
 import { depforgeRouter } from './routes/depforge.js';
 import { assistantRouter } from './routes/assistant.js';
+import { agentTaskService } from './services/agentTaskService.js';
 import { collaborationService } from './services/collaborationService.js';
 import { runtimeService } from './services/runtimeService.js';
 import { previewService } from './services/previewService.js';
@@ -174,6 +175,9 @@ initializeCollaborationSockets(httpServer);
 
 httpServer.listen(env.SERVER_PORT, () => {
   console.info(`Server listening on port ${env.SERVER_PORT}`);
+  void agentTaskService
+    .recoverInterrupted()
+    .catch(() => console.error('Agent task recovery failed.'));
   void runtimeService.resumeIdleTimers().catch(() => {
     console.error('Workspace runtime idle recovery failed.');
   });

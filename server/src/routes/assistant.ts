@@ -4,11 +4,45 @@ import { prisma } from '../db/client.js';
 import { HttpError } from '../errors/httpError.js';
 import { SlidingWindowRateLimiter } from '../middleware/rateLimit.js';
 import { assistantService } from '../services/assistantService.js';
+import { agentTaskService } from '../services/agentTaskService.js';
 import { membershipService } from '../services/membershipService.js';
 import { workspaceIdSchema } from '../validation/workspace.js';
 
 export const assistantRouter = Router();
 const limiter = new SlidingWindowRateLimiter(60_000, 6);
+
+assistantRouter.get('/workspaces/:workspaceId/agent-tasks', async (req, res, next) => {
+  try {
+    const id = workspaceIdSchema.parse(req.params.workspaceId);
+    if (!req.authUser?.sub) throw new HttpError(401, 'Authentication is required.');
+    await membershipService.requireMember(id, req.authUser.sub);
+    const tasks = await prisma.agentTask.findMany({
+      where: { workspaceId: id },
+      orderBy: { createdAt: 'desc' },
+      take: 20,
+    });
+    res.json({ tasks });
+  } catch (error) {
+    next(error);
+  }
+});
+
+assistantRouter.post('/workspaces/:workspaceId/agent-tasks', async (req, res, next) => {
+  try {
+    const id = workspaceIdSchema.parse(req.params.workspaceId);
+    if (!req.authUser?.sub) throw new HttpError(401, 'Authentication is required.');
+    await membershipService.requireEditor(id, req.authUser.sub);
+    if (!limiter.check(req.authUser.sub).allowed)
+      throw new HttpError(429, 'Please wait before starting another task.');
+    const { prompt } = z
+      .object({ prompt: z.string().trim().min(1).max(4000) })
+      .strict()
+      .parse(req.body);
+    res.status(202).json({ task: await agentTaskService.start(id, req.authUser.sub, prompt) });
+  } catch (error) {
+    next(error);
+  }
+});
 
 assistantRouter.post('/workspaces/:workspaceId/assistant/test', async (req, res, next) => {
   try {
