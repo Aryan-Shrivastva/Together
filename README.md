@@ -15,11 +15,47 @@ Together is a browser-based, real-time collaborative development workspace for s
 
 The shared terminal and detected Run/Test commands are available inside a workspace. Branches, previews, datasets, and export are introduced in later Phase 2 steps.
 
+## Team chat and version updates
+
+Open **Team** in the workspace header to see who is online, the file each teammate
+has open, and persistent group chat. Click a teammate's file to open it. Press Enter
+to send a message (Shift+Enter for a new line); the Team button shows unread live
+messages while the panel is closed. Viewers can read chat but cannot send messages.
+
+Commits, pulls, and task-branch merges made through Together notify other workspace
+members. Updates remain unread per account in PostgreSQL, so teammates returning
+after being offline see who changed what. **Refresh workspace** saves pending live
+edits, refreshes the file tree and Git status, and marks only the displayed versions
+as reviewed. Collaborative editor contents stay live; viewer file contents are
+reloaded. This does not automatically pull from GitHub or discard anyone's edits.
+Commits made outside Together appear after someone pulls them into the workspace.
+
+Edits and chat live on the server's persistent volumes. GitHub backup requires a
+push; a local Docker volume alone is not an off-machine cloud backup.
+
+After updating an existing installation, apply database migrations and regenerate
+Prisma before restarting the server. The collaboration integration test uses
+temporary database fixtures and removes them afterwards:
+
+```bash
+docker compose exec -T server npx tsx --test server/tests/team-collaboration.test.ts
+```
+
 ## Dependency change preview
 
 The dependency workflow currently operates as a read-only demonstration. It inspects declared npm and Python dependencies, checks npm/PyPI registry evidence, and presents a clear before → proposed version comparison, including the manifest file where each package was found. It does not edit source files or manifests, install packages, regenerate lockfiles, or create Git changes.
 
 In a ready workspace, open the Terminal panel and click **Install dependencies (preview)**. The app opens the **Dependencies** view automatically and shows the detected package changes. The preview is intentionally the visible proof that the agent can discover and evaluate dependencies; execution and approval can be enabled later without changing this comparison flow.
+
+## Repository structure
+
+- `client/` — browser frontend, workspace interface, editor, and team chat.
+- `server/` — backend API, collaboration, database schema, and workspace services.
+- `aws/` — AWS VM setup, deployment, and backup scripts. See [AWS deployment](aws/README.md).
+- `runner/` — image used for isolated workspace containers.
+- Root Compose files — local and production service configuration.
+
+The AWS website runs independently of your laptop. Local Docker is only needed when running the local Compose stack; the AWS server still uses Docker to run Together and workspace containers. ngrok is not needed for the deployed AWS site.
 
 ## Prerequisites
 
@@ -59,6 +95,45 @@ Production uses the separate hardened compose file. Copy `.env.production.exampl
 Copy-Item .env.production.example .env.production
 docker compose --env-file .env.production -f docker-compose.production.yml up -d --build
 ```
+
+For a small Ubuntu 24.04 VM (including EC2), use the Linux deployment scripts:
+
+```bash
+sudo bash scripts/bootstrap-ubuntu.sh
+# Create .env.production from the example and fill in the public HTTPS hostname and secrets.
+sudo bash scripts/deploy-production.sh
+```
+
+The deployment script builds services sequentially, applies migrations before the
+API starts, and waits for service health. Allow inbound TCP 80/443; restrict SSH to
+your IP. PostgreSQL, object storage, and the Docker API proxy have no published
+ports. Set the GitHub OAuth App homepage to `PUBLIC_ORIGIN` and its callback to
+`PUBLIC_ORIGIN/auth/github/callback` before signing in.
+
+One cloud VM hosts the shared source files, PostgreSQL, chat, and per-workspace
+execution containers. Team members only need a browser; their laptops can be off
+without stopping the workspace. Persistent volumes survive container rebuilds,
+but back them up before terminating the VM or its disk. Commits made inside
+Together notify teammates immediately; commits pushed from external clones need
+to be pulled into the workspace before they appear.
+
+AWS Free-plan eligibility still consumes credits: instance, public IPv4, disk,
+and billable traffic all count. Check the account's remaining credits and plan
+expiry rather than assuming this is permanent free hosting.
+
+The production object-store image is built from an official tagged MinIO source
+release because the old community Docker Hub image is unavailable.
+
+Verify real container execution and dataset mounts with disposable fixtures:
+
+```bash
+sudo docker compose --env-file .env.production -f docker-compose.production.yml exec -T server node --input-type=module < server/tests/production-smoke.mjs
+```
+
+For a Linux backup, pause edits/uploads during the backup and run
+`sudo bash scripts/backup.sh`. It includes PostgreSQL, workspace files, and object
+storage. Copy the output off the VM and keep the production encryption keys
+separately; restoring encrypted GitHub tokens requires the original key.
 
 The production gateway is the only published application service. PostgreSQL, MinIO, the API, and the static client stay on private Docker networks; workspace containers receive their own internal network, resource limits, read-only root filesystem, dropped capabilities, and no Docker socket. The API server talks to a restricted Docker API proxy rather than mounting the Docker socket directly.
 

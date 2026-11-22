@@ -1,61 +1,73 @@
 import { z } from 'zod';
 
-const applicationEnvironmentSchema = z.object({
-  NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
-  SERVER_PORT: z.coerce.number().int().min(1).max(65535).default(4000),
-  CORS_ORIGIN: z.string().url(),
-  WORKSPACE_ROOT: z.string().min(1),
-  WORKSPACE_CLONE_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(600_000).default(120_000),
-  INVITE_TTL_HOURS: z.coerce.number().int().min(1).max(720).default(168),
-  MAX_FILE_OPEN_BYTES: z.coerce.number().int().min(1_024).max(10_485_760).default(1_048_576),
-  FILE_TREE_MAX_ENTRIES: z.coerce.number().int().min(100).max(100_000).default(10_000),
-  COLLABORATION_PERSIST_DEBOUNCE_MS: z.coerce.number().int().min(1_000).max(5_000).default(1_500),
-  COLLABORATION_DOC_UNLOAD_MS: z.coerce.number().int().min(5_000).max(300_000).default(30_000),
-  WORKSPACE_RUNTIME_IMAGE: z.string().min(1).default('together-workspace-runtime:local'),
-  WORKSPACE_VOLUME_NAME: z.string().min(1).default('together_workspace_data'),
-  WORKSPACE_RUNTIME_MEMORY_MB: z.coerce.number().int().min(128).max(4_096).default(768),
-  WORKSPACE_RUNTIME_CPU_COUNT: z.coerce.number().min(0.1).max(4).default(1),
-  WORKSPACE_RUNTIME_PIDS_LIMIT: z.coerce.number().int().min(32).max(512).default(128),
-  WORKSPACE_RUNTIME_IDLE_MS: z.coerce.number().int().min(60_000).max(3_600_000).default(900_000),
-  PREVIEW_IDLE_MS: z.coerce.number().int().min(60_000).max(3_600_000).default(900_000),
-  MINIO_ENDPOINT: z.string().min(1).default('minio'),
-  MINIO_PORT: z.coerce.number().int().min(1).max(65_535).default(9000),
-  MINIO_USE_SSL: z.coerce.boolean().default(false),
-  MINIO_ACCESS_KEY: z.string().min(8).optional(),
-  MINIO_SECRET_KEY: z.string().min(8).optional(),
-  MINIO_BUCKET: z
-    .string()
-    .regex(/^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/)
-    .default('together-datasets'),
-  MAX_DATASET_BYTES: z.coerce.number().int().min(1_024).max(536_870_912).default(104_857_600),
-  MAX_EXPORT_BYTES: z.coerce.number().int().min(1_048_576).max(1_073_741_824).default(268_435_456),
-  TRUST_PROXY: z.coerce.boolean().default(false),
-  DOCKER_HOST: z
-    .string()
-    .url()
-    .refine(
-      (value) =>
-        value.startsWith('tcp://') || value.startsWith('http://') || value.startsWith('https://'),
-    )
-    .optional(),
-}).superRefine((value, context) => {
-  if (value.NODE_ENV === 'production') {
-    if (new URL(value.CORS_ORIGIN).protocol !== 'https:') {
-      context.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ['CORS_ORIGIN'],
-        message: 'must use HTTPS in production',
-      });
+const environmentBoolean = z.preprocess(
+  (value) => (value === 'true' ? true : value === 'false' ? false : value),
+  z.boolean(),
+);
+
+const applicationEnvironmentSchema = z
+  .object({
+    NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
+    SERVER_PORT: z.coerce.number().int().min(1).max(65535).default(4000),
+    CORS_ORIGIN: z.string().url(),
+    WORKSPACE_ROOT: z.string().min(1),
+    WORKSPACE_CLONE_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(600_000).default(120_000),
+    INVITE_TTL_HOURS: z.coerce.number().int().min(1).max(720).default(168),
+    MAX_FILE_OPEN_BYTES: z.coerce.number().int().min(1_024).max(10_485_760).default(1_048_576),
+    FILE_TREE_MAX_ENTRIES: z.coerce.number().int().min(100).max(100_000).default(10_000),
+    COLLABORATION_PERSIST_DEBOUNCE_MS: z.coerce.number().int().min(1_000).max(5_000).default(1_500),
+    COLLABORATION_DOC_UNLOAD_MS: z.coerce.number().int().min(5_000).max(300_000).default(30_000),
+    WORKSPACE_RUNTIME_IMAGE: z.string().min(1).default('together-workspace-runtime:local'),
+    WORKSPACE_VOLUME_NAME: z.string().min(1).default('together_workspace_data'),
+    WORKSPACE_RUNTIME_MEMORY_MB: z.coerce.number().int().min(128).max(4_096).default(768),
+    WORKSPACE_RUNTIME_CPU_COUNT: z.coerce.number().min(0.1).max(4).default(1),
+    WORKSPACE_RUNTIME_PIDS_LIMIT: z.coerce.number().int().min(32).max(512).default(128),
+    WORKSPACE_RUNTIME_IDLE_MS: z.coerce.number().int().min(60_000).max(3_600_000).default(900_000),
+    PREVIEW_IDLE_MS: z.coerce.number().int().min(60_000).max(3_600_000).default(900_000),
+    MINIO_ENDPOINT: z.string().min(1).default('minio'),
+    MINIO_PORT: z.coerce.number().int().min(1).max(65_535).default(9000),
+    MINIO_USE_SSL: environmentBoolean.default(false),
+    MINIO_ACCESS_KEY: z.string().min(8).optional(),
+    MINIO_SECRET_KEY: z.string().min(8).optional(),
+    MINIO_BUCKET: z
+      .string()
+      .regex(/^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/)
+      .default('together-datasets'),
+    MAX_DATASET_BYTES: z.coerce.number().int().min(1_024).max(536_870_912).default(104_857_600),
+    MAX_EXPORT_BYTES: z.coerce
+      .number()
+      .int()
+      .min(1_048_576)
+      .max(1_073_741_824)
+      .default(268_435_456),
+    TRUST_PROXY: environmentBoolean.default(false),
+    DOCKER_HOST: z
+      .string()
+      .url()
+      .refine(
+        (value) =>
+          value.startsWith('tcp://') || value.startsWith('http://') || value.startsWith('https://'),
+      )
+      .optional(),
+  })
+  .superRefine((value, context) => {
+    if (value.NODE_ENV === 'production') {
+      if (new URL(value.CORS_ORIGIN).protocol !== 'https:') {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['CORS_ORIGIN'],
+          message: 'must use HTTPS in production',
+        });
+      }
+      if (!value.MINIO_ACCESS_KEY || !value.MINIO_SECRET_KEY) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['MINIO_SECRET_KEY'],
+          message: 'MinIO credentials are required in production',
+        });
+      }
     }
-    if (!value.MINIO_ACCESS_KEY || !value.MINIO_SECRET_KEY) {
-      context.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ['MINIO_SECRET_KEY'],
-        message: 'MinIO credentials are required in production',
-      });
-    }
-  }
-});
+  });
 
 const base64KeySchema = z.string().refine((value) => {
   try {

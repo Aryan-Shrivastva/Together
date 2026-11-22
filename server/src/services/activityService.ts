@@ -1,8 +1,16 @@
 import { prisma } from '../db/client.js';
 
+export const versionActions = ['git.committed', 'git.pulled', 'branch.merged'];
+
 export class ActivityService {
+  private versionListener: ((workspaceId: string) => void) | undefined;
+
+  setVersionListener(listener: (workspaceId: string) => void): void {
+    this.versionListener = listener;
+  }
+
   async log(workspaceId: string, userId: string | undefined, action: string, details?: string) {
-    return prisma.activityLog.create({
+    const activity = await prisma.activityLog.create({
       data: {
         workspaceId,
         action,
@@ -10,6 +18,8 @@ export class ActivityService {
         ...(details ? { details } : {}),
       },
     });
+    if (versionActions.includes(action)) this.versionListener?.(workspaceId);
+    return activity;
   }
 
   async list(workspaceId: string) {

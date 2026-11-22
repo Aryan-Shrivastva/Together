@@ -11,5 +11,5 @@
 
   @backend path /health /auth/* /api/* /preview/* /socket.io/* /yjs/*
   reverse_proxy @backend server:4000
-  reverse_proxy client:80
+  reverse_proxy client:8080
 }

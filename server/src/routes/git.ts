@@ -72,8 +72,12 @@ gitRouter.post(
     try {
       const workspaceId = workspaceIdSchema.parse(request.params.workspaceId);
       await requireEditor(workspaceId, request.authUser?.sub);
-      await gitService.pull(workspaceId);
-      await activityService.log(workspaceId, request.authUser?.sub, 'git.pulled');
+      const result = await gitService.pull(workspaceId);
+      await activityService.log(
+        workspaceId,
+        request.authUser?.sub,
+        result.changed ? 'git.pulled' : 'git.pull_checked',
+      );
       emitFileSystemChanged(workspaceId);
       response.status(200).json({ ok: true });
     } catch (error) {

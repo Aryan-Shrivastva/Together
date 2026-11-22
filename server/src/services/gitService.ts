@@ -119,9 +119,12 @@ export class GitService {
   async pull(workspaceId: string) {
     try {
       await collaborationService.flushWorkspace(workspaceId);
-      const result = await (await this.git(workspaceId, true)).pull();
+      const git = await this.git(workspaceId, true);
+      const before = await git.revparse(['HEAD']);
+      const result = await git.pull();
+      const after = await git.revparse(['HEAD']);
       await collaborationService.reloadWorkspace(workspaceId);
-      return result;
+      return { ...result, changed: before.trim() !== after.trim() };
     } catch (error) {
       if (error instanceof HttpError) {
         throw error;

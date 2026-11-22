@@ -11,6 +11,7 @@ import { verifySessionToken } from '../auth/session.js';
 import { env } from '../config/env.js';
 import { prisma } from '../db/client.js';
 import { collaborationService } from '../services/collaborationService.js';
+import { activityService } from '../services/activityService.js';
 import { fileService } from '../services/fileService.js';
 import { membershipService } from '../services/membershipService.js';
 import { terminalService } from '../services/terminalService.js';
@@ -48,11 +49,14 @@ async function emitPresence(workspaceId: string): Promise<void> {
   for (const socket of sockets ?? []) {
     const user = socket.data.user as
       { id: string; username: string; avatarUrl: string } | undefined;
-    if (user)
+    if (user) {
+      const previous = users.get(user.id);
       users.set(user.id, {
         ...user,
-        filePath: (socket.data.filePath as string | null | undefined) ?? null,
+        // File/terminal sockets must not erase the file reported by the presence socket.
+        filePath: (socket.data.filePath as string | null | undefined) ?? previous?.filePath ?? null,
       });
+    }
   }
   socketServer
     ?.to(workspaceRoom(workspaceId))
@@ -91,6 +95,9 @@ export function initializeWorkspaceSockets(httpServer: HttpServer): Server {
   });
   terminalService.setOutputListener((workspaceId, output) => {
     socketServer?.to(workspaceRoom(workspaceId)).emit('terminal:output', { output });
+  });
+  activityService.setVersionListener((workspaceId) => {
+    socketServer?.to(workspaceRoom(workspaceId)).emit('version:available');
   });
 
   socketServer.use(async (socket, next) => {
@@ -148,16 +155,20 @@ export function initializeWorkspaceSockets(httpServer: HttpServer): Server {
         });
         return;
       }
-      const message = await prisma.chatMessage.create({
-        data: { workspaceId, userId: user.id, content: result.data.content },
-        include: { user: { select: { id: true, username: true, avatarUrl: true } } },
-      });
-      socketServer?.to(workspaceRoom(workspaceId)).emit('chat:message', {
-        id: message.id,
-        content: message.content,
-        createdAt: message.createdAt,
-        user: message.user,
-      });
+      try {
+        const message = await prisma.chatMessage.create({
+          data: { workspaceId, userId: user.id, content: result.data.content },
+          include: { user: { select: { id: true, username: true, avatarUrl: true } } },
+        });
+        socketServer?.to(workspaceRoom(workspaceId)).emit('chat:message', {
+          id: message.id,
+          content: message.content,
+          createdAt: message.createdAt,
+          user: message.user,
+        });
+      } catch {
+        socket.emit('chat:error', { error: 'Your message could not be saved. Please retry.' });
+      }
     });
     socket.on('terminal:attach', async () => {
       if (socket.data.role === 'VIEWER') {

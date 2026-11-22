@@ -10,6 +10,8 @@ import { WebsocketProvider } from 'y-websocket';
 import * as Y from 'yjs';
 
 import { useAuth } from '../auth/AuthContext';
+import { WorkspaceUpdates } from './WorkspaceUpdates';
+import { WorkspaceAssistant } from './WorkspaceAssistant';
 
 loader.config({ monaco });
 
@@ -450,6 +452,9 @@ export function WorkspaceExplorer({ workspaceId }: { workspaceId: string }) {
     'terminal',
   );
   const [isCollaborationPanelOpen, setIsCollaborationPanelOpen] = useState(false);
+  const [teamPanel, setTeamPanel] = useState<'chat' | 'assistant'>('chat');
+  const [unreadMessages, setUnreadMessages] = useState(0);
+  const [versionCheckKey, setVersionCheckKey] = useState(0);
   const [gitStatus, setGitStatus] = useState<GitStatus | null>(null);
   const [gitAction, setGitAction] = useState<'commit' | 'pull' | 'push' | null>(null);
   const [gitError, setGitError] = useState<string | null>(null);
@@ -484,6 +489,9 @@ export function WorkspaceExplorer({ workspaceId }: { workspaceId: string }) {
   const presenceSocketRef = useRef<ReturnType<typeof io> | null>(null);
   const terminalSocketRef = useRef<ReturnType<typeof io> | null>(null);
   const terminalHostRef = useRef<HTMLDivElement | null>(null);
+  const chatPanelOpenRef = useRef(isCollaborationPanelOpen);
+  const activeFilePathRef = useRef(activeFilePath);
+  const chatEndRef = useRef<HTMLDivElement | null>(null);
   const isViewer = workspace?.role === 'VIEWER';
 
   const loadTree = useCallback(async () => {
@@ -497,8 +505,56 @@ export function WorkspaceExplorer({ workspaceId }: { workspaceId: string }) {
       throw new Error('The workspace tree response was invalid.');
     }
 
-    setTree(payload.tree.filter(isFileTreeNode));
+    const nodes = payload.tree.filter(isFileTreeNode);
+    setTree(nodes);
+    return nodes;
   }, [workspaceId]);
+
+  async function refreshWorkspaceFiles() {
+    // The status endpoint flushes live edits to disk before any view is refreshed.
+    const status = await requestJson(`/api/workspaces/${workspaceId}/git/status`);
+    if (
+      typeof status !== 'object' ||
+      status === null ||
+      !('status' in status) ||
+      !isGitStatus(status.status)
+    ) {
+      throw new Error('Unable to refresh Git status. Your version notice has been kept.');
+    }
+    const nodes = await loadTree();
+    const paths = new Set<string>();
+    const visit = (items: FileTreeNode[]) =>
+      items.forEach((item) => {
+        if (item.kind === 'file') paths.add(item.path);
+        if (item.children) visit(item.children);
+      });
+    visit(nodes);
+    const refreshed = new Map<string, string>();
+    if (isViewer) {
+      await Promise.all(
+        tabs
+          .filter((tab) => paths.has(tab.path))
+          .map(async (tab) => {
+            const file = await requestJson(
+              `/api/workspaces/${workspaceId}/file?path=${encodeURIComponent(tab.path)}`,
+            );
+            if (!isFilePayload(file)) throw new Error('Unable to refresh an open file.');
+            refreshed.set(tab.path, file.content);
+          }),
+      );
+    }
+    setTabs((current) =>
+      current
+        .filter((tab) => paths.has(tab.path))
+        .map((tab) => ({
+          ...tab,
+          content: refreshed.get(tab.path) ?? tab.content,
+        })),
+    );
+    setActiveFilePath((current) => (current && paths.has(current) ? current : null));
+    setGitStatus({ ...status.status, files: status.status.files.map(toGitFileStatus) });
+    setGitNotice('Workspace refreshed. Live edits stay saved in the shared workspace.');
+  }
 
   const loadGitStatus = useCallback(async () => {
     try {
@@ -871,12 +927,39 @@ export function WorkspaceExplorer({ workspaceId }: { workspaceId: string }) {
     if (workspace?.status !== 'READY') return undefined;
     const socket = io({ auth: { workspaceId }, withCredentials: true });
     presenceSocketRef.current = socket;
+    let disposed = false;
+    async function loadChatHistory() {
+      try {
+        const payload = await requestJson(`/api/workspaces/${workspaceId}/messages`);
+        if (
+          !disposed &&
+          typeof payload === 'object' &&
+          payload !== null &&
+          'messages' in payload &&
+          Array.isArray(payload.messages)
+        ) {
+          const history = payload.messages as ChatMessage[];
+          setMessages((current) =>
+            [...new Map([...history, ...current].map((message) => [message.id, message])).values()]
+              .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+              .slice(-100),
+          );
+        }
+      } catch (cause) {
+        if (!disposed)
+          setChatError(cause instanceof Error ? cause.message : 'Unable to load chat history.');
+      }
+    }
     socket.on('connect', () => {
       setIsChatConnected(true);
       setChatError(null);
+      socket.emit('presence:update', { filePath: activeFilePathRef.current });
+      setVersionCheckKey((current) => current + 1);
+      void loadChatHistory();
     });
     socket.on('disconnect', () => {
       setIsChatConnected(false);
+      setPresence([]);
       setChatError('Reconnecting team chat…');
     });
     socket.on('connect_error', () => {
@@ -886,9 +969,16 @@ export function WorkspaceExplorer({ workspaceId }: { workspaceId: string }) {
     socket.on('presence:update', (payload: { users?: PresenceUser[] }) =>
       setPresence(payload.users ?? []),
     );
-    socket.on('chat:message', (message: ChatMessage) =>
-      setMessages((current) => [...current, message]),
-    );
+    socket.on('chat:message', (message: ChatMessage) => {
+      setMessages((current) =>
+        current.some((item) => item.id === message.id)
+          ? current
+          : [...current, message].slice(-100),
+      );
+      if (!chatPanelOpenRef.current && message.user.id !== user?.id)
+        setUnreadMessages((current) => current + 1);
+    });
+    socket.on('version:available', () => setVersionCheckKey((current) => current + 1));
     socket.on('chat:error', (payload: unknown) => {
       if (
         typeof payload === 'object' &&
@@ -909,32 +999,27 @@ export function WorkspaceExplorer({ workspaceId }: { workspaceId: string }) {
         setCollaborationStatus(payload.error);
       }
     });
-    void requestJson(`/api/workspaces/${workspaceId}/messages`)
-      .then((payload) => {
-        if (
-          typeof payload === 'object' &&
-          payload !== null &&
-          'messages' in payload &&
-          Array.isArray(payload.messages)
-        ) {
-          setMessages(payload.messages as ChatMessage[]);
-        }
-      })
-      .catch((requestError: unknown) => {
-        setChatError(
-          requestError instanceof Error ? requestError.message : 'Unable to load chat history.',
-        );
-      });
     return () => {
+      disposed = true;
       presenceSocketRef.current = null;
       setIsChatConnected(false);
       socket.disconnect();
     };
-  }, [workspace?.status, workspaceId]);
+  }, [workspace?.status, workspaceId, user?.id]);
 
   useEffect(() => {
+    activeFilePathRef.current = activeFilePath;
     presenceSocketRef.current?.emit('presence:update', { filePath: activeFilePath });
   }, [activeFilePath]);
+
+  useEffect(() => {
+    chatPanelOpenRef.current = isCollaborationPanelOpen;
+    if (isCollaborationPanelOpen) setUnreadMessages(0);
+  }, [isCollaborationPanelOpen]);
+
+  useEffect(() => {
+    if (isCollaborationPanelOpen) chatEndRef.current?.scrollIntoView({ block: 'nearest' });
+  }, [messages, isCollaborationPanelOpen]);
 
   function sendChat() {
     const content = chatInput.trim();
@@ -1323,7 +1408,7 @@ export function WorkspaceExplorer({ workspaceId }: { workspaceId: string }) {
       onClick={() => setContextMenu(null)}
     >
       <section className="flex h-full min-w-0 flex-col">
-        <header className="flex h-9 shrink-0 items-center border-b border-[#0e0b08] bg-[#232220] px-3 text-xs text-[#f0e4c5]">
+        <header className="flex h-14 shrink-0 items-center border-b border-[#51473b] bg-gradient-to-r from-[#28231e] via-[#24221f] to-[#1c2424] px-4 text-xs text-[#f0e4c5]">
           <div className="flex min-w-0 items-center gap-4">
             <span
               className="grid h-5 w-5 place-items-center text-base text-cyan-300"
@@ -1331,18 +1416,11 @@ export function WorkspaceExplorer({ workspaceId }: { workspaceId: string }) {
             >
               ◇
             </span>
-            <nav className="hidden items-center gap-4 md:flex" aria-label="Application menu">
-              <span>File</span>
-              <span>Edit</span>
-              <span>Selection</span>
-              <span>View</span>
-              <span>Go</span>
-              <span>Run</span>
-              <span>Terminal</span>
-              <span>Help</span>
-            </nav>
+            <span className="hidden text-sm font-semibold tracking-wide text-[#f6ead1] sm:inline">
+              Together <span className="font-normal text-[#9c8f7f]">/ workspace</span>
+            </span>
           </div>
-          <p className="mx-auto max-w-[45%] truncate rounded border border-[#45413a] bg-[#1c1b19] px-3 py-1 text-center text-[#d4bd99]">
+          <p className="mx-auto max-w-[35%] truncate rounded-full border border-[#665746] bg-[#171714] px-4 py-1.5 text-center font-medium text-[#f1dfbc]">
             {workspace?.name ?? 'Together'}
           </p>
           <div className="ml-auto flex shrink-0 items-center gap-1">
@@ -1365,13 +1443,20 @@ export function WorkspaceExplorer({ workspaceId }: { workspaceId: string }) {
               ▰
             </button>
             <button
-              className={`grid h-7 w-7 place-items-center rounded text-base hover:bg-[#45413a] hover:text-white ${isCollaborationPanelOpen ? 'bg-[#45413a] text-cyan-200' : 'text-[#a89984]'}`}
-              title="Open team chat"
+              className={`flex h-7 items-center gap-2 rounded px-2 text-xs hover:bg-[#45413a] hover:text-white ${isCollaborationPanelOpen ? 'bg-[#45413a] text-cyan-200' : 'text-[#a89984]'}`}
+              title="See online teammates, their files, and team chat"
               type="button"
-              aria-label="Open team chat"
+              aria-label={`Team chat, ${presence.length} online, ${unreadMessages} unread messages`}
+              aria-expanded={isCollaborationPanelOpen}
               onClick={() => setIsCollaborationPanelOpen((open) => !open)}
             >
-              ▯
+              <span className={isChatConnected ? 'text-emerald-300' : 'text-amber-300'}>●</span>
+              Team · {presence.length}
+              {unreadMessages > 0 ? (
+                <span className="rounded-full bg-cyan-300 px-1.5 text-[#161412]">
+                  {unreadMessages > 99 ? '99+' : unreadMessages}
+                </span>
+              ) : null}
             </button>
             <button
               className="ml-2 text-cyan-300 hover:text-cyan-100"
@@ -1382,6 +1467,14 @@ export function WorkspaceExplorer({ workspaceId }: { workspaceId: string }) {
             </button>
           </div>
         </header>
+
+        {workspace?.status === 'READY' ? (
+          <WorkspaceUpdates
+            workspaceId={workspaceId}
+            checkKey={versionCheckKey}
+            onRefresh={refreshWorkspaceFiles}
+          />
+        ) : null}
 
         {error ? (
           <p className="absolute left-1/2 top-12 z-20 -translate-x-1/2 rounded border border-rose-500/50 bg-[#2a1614] px-4 py-2 text-sm text-rose-200 shadow-xl">
@@ -1427,13 +1520,6 @@ export function WorkspaceExplorer({ workspaceId }: { workspaceId: string }) {
                   ▱
                 </button>
                 <button
-                  className="grid h-12 w-full place-items-center text-[#a89984] hover:bg-[#2a2724] hover:text-white"
-                  title="Search"
-                  type="button"
-                >
-                  ⌕
-                </button>
-                <button
                   className={`grid h-12 w-full place-items-center ${isGitPanelOpen ? 'border-l-2 border-cyan-300 bg-[#2a2724] text-cyan-200' : 'text-[#a89984] hover:bg-[#2a2724] hover:text-white'}`}
                   title="Source control"
                   type="button"
@@ -1444,20 +1530,6 @@ export function WorkspaceExplorer({ workspaceId }: { workspaceId: string }) {
                   }}
                 >
                   ⑂
-                </button>
-                <button
-                  className="grid h-12 w-full place-items-center text-[#a89984] hover:bg-[#2a2724] hover:text-white"
-                  title="Run and debug"
-                  type="button"
-                >
-                  ▷
-                </button>
-                <button
-                  className="grid h-12 w-full place-items-center text-[#a89984] hover:bg-[#2a2724] hover:text-white"
-                  title="Extensions"
-                  type="button"
-                >
-                  ▦
                 </button>
                 <button
                   className="mt-auto grid h-12 w-full place-items-center text-[#a89984] hover:bg-[#2a2724] hover:text-white"
@@ -1483,7 +1555,7 @@ export function WorkspaceExplorer({ workspaceId }: { workspaceId: string }) {
                       ↻
                     </button>
                   </div>
-                  <div className="border-b border-[#45413a] px-4 py-3 text-xs text-[#d4bd99]">
+                  <div className="max-h-[35%] overflow-y-auto border-b border-[#51483e] px-5 py-4 text-xs text-[#d4bd99]">
                     <p className="truncate font-medium text-[#fbf1c7]">{workspace.repoFullName}</p>
                     <p className="mt-1">
                       {gitStatus?.current ?? workspace.defaultBranch}
@@ -1780,6 +1852,7 @@ export function WorkspaceExplorer({ workspaceId }: { workspaceId: string }) {
                       language={activeTab.language}
                       theme="together-warm-dark"
                       defaultValue={activeTab.content}
+                      {...(isViewer ? { value: activeTab.content } : {})}
                       path={activeTab.path}
                       onMount={(editor) => {
                         setEditorInstance(editor);
@@ -1818,7 +1891,6 @@ export function WorkspaceExplorer({ workspaceId }: { workspaceId: string }) {
                 {isBottomPanelOpen ? (
                   <section className="h-64 shrink-0 border-t border-[#45413a] bg-[#161412]">
                     <div className="flex h-9 items-center gap-5 border-b border-[#45413a] px-4 text-[11px] font-semibold uppercase tracking-wider text-[#d4bd99]">
-                      <span>Problems</span>
                       <button
                         className={
                           activeBottomPanel === 'output'
@@ -1852,7 +1924,6 @@ export function WorkspaceExplorer({ workspaceId }: { workspaceId: string }) {
                       >
                         Terminal
                       </button>
-                      <span>Ports</span>
                     </div>
                     {activeBottomPanel === 'depforge' ? (
                       <div className="h-[12.75rem] overflow-y-auto p-4 text-xs text-[#d4bd99]">
@@ -2171,23 +2242,23 @@ export function WorkspaceExplorer({ workspaceId }: { workspaceId: string }) {
                 ) : null}
               </section>
             </div>
-            <footer className="flex h-6 shrink-0 items-center justify-between bg-[#d4bd99] px-3 text-[11px] text-[#1c1b19]">
+            <footer className="flex h-7 shrink-0 items-center justify-between border-t border-[#51483e] bg-[#282824] px-4 text-[11px] text-[#d5c7ab]">
               <div className="flex items-center gap-4">
                 <span>⑂ {workspace.defaultBranch}</span>
-                <span>↻</span>
-                <span>× 0</span>
               </div>
               <div className="flex items-center gap-4">
                 <span>{activeTab ? collaborationStatus : 'Ready'}</span>
-                <span>UTF-8</span>
+
                 <span>{activeTab?.language ?? 'Plain Text'}</span>
-                <span>◉ {presence.length}</span>
+                <button type="button" onClick={() => setIsCollaborationPanelOpen(true)}>
+                  ● {presence.length} online
+                </button>
               </div>
             </footer>
 
             {isCollaborationPanelOpen ? (
-              <aside className="absolute bottom-6 right-0 top-0 z-10 flex w-80 flex-col border-l border-[#45413a] bg-[#232220] shadow-2xl">
-                <div className="flex h-10 shrink-0 items-center justify-between border-b border-[#45413a] px-4 text-xs font-semibold uppercase tracking-wide">
+              <aside className="absolute bottom-7 right-0 top-0 z-10 flex w-[min(24rem,100%)] flex-col border-l border-[#5a5146] bg-[#242320] shadow-[-18px_0_50px_rgba(0,0,0,0.35)]">
+                <div className="flex h-14 shrink-0 items-center justify-between border-b border-[#51483e] bg-[#2b2824] px-5 text-xs font-semibold uppercase tracking-[0.14em]">
                   <span>Team collaboration</span>
                   <button
                     className="text-lg text-[#d4bd99] hover:text-white"
@@ -2198,49 +2269,154 @@ export function WorkspaceExplorer({ workspaceId }: { workspaceId: string }) {
                     ×
                   </button>
                 </div>
-                <div className="border-b border-[#45413a] px-4 py-3">
-                  <h3 className="text-sm font-semibold">Online now ({presence.length})</h3>
-                  <div className="mt-2 space-y-2 text-xs text-[#d4bd99]">
-                    {presence.map((member) => (
-                      <p key={member.id}>
-                        {member.username}
-                        {member.filePath ? ` · ${member.filePath}` : ''}
-                      </p>
-                    ))}
-                  </div>
-                </div>
-                <div className="flex min-h-0 flex-1 flex-col p-4">
-                  <h3 className="text-sm font-semibold">Team chat</h3>
-                  {chatError ? (
-                    <p className="mt-2 rounded border border-amber-500/40 bg-amber-500/10 p-2 text-xs text-amber-100">
-                      {chatError}
-                    </p>
-                  ) : null}
-                  <div className="mt-3 min-h-0 flex-1 space-y-3 overflow-auto text-xs">
-                    {messages.map((message) => (
-                      <p key={message.id}>
-                        <span className="font-semibold text-cyan-200">{message.user.username}</span>
-                        <br />
-                        {message.content}
-                      </p>
-                    ))}
-                  </div>
-                  <textarea
-                    className="mt-3 h-20 w-full resize-none rounded border border-[#6b655c] bg-[#1c1b19] p-2 text-xs outline-none focus:border-cyan-400 disabled:cursor-not-allowed disabled:opacity-60"
-                    value={chatInput}
-                    disabled={!isChatConnected}
-                    onChange={(event) => setChatInput(event.target.value)}
-                    placeholder={isChatConnected ? 'Message the team' : 'Reconnecting chat…'}
-                  />
+                <div className="flex gap-4 border-b border-[#51483e] px-5 text-xs">
                   <button
-                    className="mt-2 self-end rounded bg-cyan-500 px-3 py-2 text-xs font-semibold text-slate-950 hover:bg-cyan-300 disabled:cursor-not-allowed disabled:bg-[#45413a] disabled:text-[#6b655c]"
                     type="button"
-                    disabled={isViewer || !isChatConnected || !chatInput.trim()}
-                    onClick={sendChat}
+                    aria-pressed={teamPanel === 'chat'}
+                    className={
+                      teamPanel === 'chat'
+                        ? 'border-b-2 border-cyan-300 py-3 text-cyan-100'
+                        : 'py-3 text-[#a89984]'
+                    }
+                    onClick={() => setTeamPanel('chat')}
                   >
-                    Send
+                    Team chat
+                  </button>
+                  <button
+                    type="button"
+                    aria-pressed={teamPanel === 'assistant'}
+                    className={
+                      teamPanel === 'assistant'
+                        ? 'border-b-2 border-cyan-300 py-3 text-cyan-100'
+                        : 'py-3 text-[#a89984]'
+                    }
+                    onClick={() => setTeamPanel('assistant')}
+                  >
+                    AI assistant
                   </button>
                 </div>
+                {teamPanel === 'assistant' ? (
+                  <WorkspaceAssistant workspaceId={workspaceId} isViewer={isViewer} />
+                ) : (
+                  <>
+                    <div className="max-h-[35%] overflow-y-auto border-b border-[#51483e] px-5 py-4">
+                      <h3 className="text-sm font-semibold">Online now ({presence.length})</h3>
+                      <div className="mt-2 space-y-2 text-xs text-[#d4bd99]">
+                        {presence.map((member) => (
+                          <div key={member.id} className="flex items-start gap-2">
+                            <img src={member.avatarUrl} alt="" className="h-7 w-7 rounded-full" />
+                            <div className="min-w-0">
+                              <p>
+                                <span className="text-emerald-300">●</span> {member.username}
+                                {member.id === user?.id ? ' (you)' : ''}
+                              </p>
+                              {member.filePath ? (
+                                <button
+                                  type="button"
+                                  className="block max-w-full truncate text-cyan-200 hover:underline"
+                                  title={`Open ${member.filePath}`}
+                                  onClick={() => void openFile(member.filePath!)}
+                                >
+                                  {member.filePath}
+                                </button>
+                              ) : (
+                                <p className="text-[#a89984]">Browsing workspace</p>
+                              )}
+                            </div>
+                          </div>
+                        ))}
+                        {!presence.length ? (
+                          <p>
+                            {isChatConnected
+                              ? 'No teammates online yet.'
+                              : 'Connecting to your team…'}
+                          </p>
+                        ) : null}
+                      </div>
+                    </div>
+                    <div className="flex min-h-0 flex-1 flex-col p-4">
+                      <h3 className="text-sm font-semibold">Team chat</h3>
+                      <p className="mt-1 text-[10px] text-[#a89984]">
+                        Edits auto-save to the shared workspace. Commit to save a version; push to
+                        back it up on GitHub.
+                      </p>
+                      {chatError ? (
+                        <p className="mt-2 rounded border border-amber-500/40 bg-amber-500/10 p-2 text-xs text-amber-100">
+                          {chatError}
+                        </p>
+                      ) : null}
+                      <div
+                        role="log"
+                        aria-label="Team messages"
+                        aria-live="polite"
+                        className="mt-3 min-h-0 flex-1 space-y-3 overflow-auto rounded-xl border border-[#45413a] bg-[#1b1b19] p-3 text-xs"
+                      >
+                        {!messages.length ? (
+                          <p className="text-[#a89984]">
+                            Start a conversation with your team. Messages are saved for when
+                            teammates return.
+                          </p>
+                        ) : null}
+                        {messages.map((message) => (
+                          <p
+                            key={message.id}
+                            className="rounded-lg border border-[#403d37] bg-[#292824] p-3 whitespace-pre-wrap break-words leading-relaxed"
+                          >
+                            <span className="font-semibold text-cyan-200">
+                              {message.user.username}
+                            </span>
+                            <time
+                              dateTime={message.createdAt}
+                              title={new Date(message.createdAt).toLocaleString()}
+                              className="ml-2 text-[10px] text-[#a89984]"
+                            >
+                              {new Date(message.createdAt).toLocaleTimeString([], {
+                                hour: '2-digit',
+                                minute: '2-digit',
+                              })}
+                            </time>
+                            <br />
+                            {message.content}
+                          </p>
+                        ))}
+                        <div ref={chatEndRef} />
+                      </div>
+                      <textarea
+                        className="mt-3 h-20 w-full resize-none rounded border border-[#6b655c] bg-[#1c1b19] p-2 text-xs outline-none focus:border-cyan-400 disabled:cursor-not-allowed disabled:opacity-60"
+                        value={chatInput}
+                        disabled={isViewer || !isChatConnected}
+                        aria-label="Message your team"
+                        maxLength={5000}
+                        onChange={(event) => setChatInput(event.target.value)}
+                        onKeyDown={(event) => {
+                          if (
+                            event.key === 'Enter' &&
+                            !event.shiftKey &&
+                            !event.nativeEvent.isComposing
+                          ) {
+                            event.preventDefault();
+                            sendChat();
+                          }
+                        }}
+                        placeholder={
+                          isViewer
+                            ? 'Viewer access — chat is read-only'
+                            : isChatConnected
+                              ? 'Message the team · Enter to send'
+                              : 'Reconnecting chat…'
+                        }
+                      />
+                      <button
+                        className="mt-2 self-end rounded bg-cyan-500 px-3 py-2 text-xs font-semibold text-slate-950 hover:bg-cyan-300 disabled:cursor-not-allowed disabled:bg-[#45413a] disabled:text-[#6b655c]"
+                        type="button"
+                        disabled={isViewer || !isChatConnected || !chatInput.trim()}
+                        onClick={sendChat}
+                      >
+                        Send
+                      </button>
+                    </div>
+                  </>
+                )}
               </aside>
             ) : null}
           </section>

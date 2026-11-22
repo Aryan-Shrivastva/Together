@@ -138,7 +138,9 @@ export class RuntimeService {
 
       const network = await this.ensureNetwork(workspaceId, runtime.dockerNetworkId);
       const sourcePath = await this.workspaceVolumePath(workspaceId);
-      const datasetsPath = await workspaceDataService.syncWorkspaceDatasets(workspaceId);
+      await workspaceDataService.syncWorkspaceDatasets(workspaceId);
+      // Bind mounts are resolved by the Docker daemon, not inside the API container.
+      const datasetsPath = resolve(sourcePath, '.together', 'datasets');
       const container = await this.docker.createContainer({
         name: runtimeName(workspaceId),
         Image: env.WORKSPACE_RUNTIME_IMAGE,

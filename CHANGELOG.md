@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased — Cloud deployment
+
+- Added Ubuntu bootstrap and sequential production deployment scripts with automatic database migrations.
+- Fixed non-root workspace volume ownership, Nginx read-only startup, Docker proxy configuration/PID paths, and API access to outbound GitHub/registry requests.
+- Included workspace-local Node dependencies in the production API image and corrected dataset bind paths for the Docker daemon.
+- Parsed boolean environment values explicitly so `MINIO_USE_SSL=false` uses HTTP as intended.
+- Built MinIO from its official tagged source release instead of unavailable community registry images, and excluded deployment credentials from Docker contexts.
+
+## Unreleased — Team awareness and version notifications
+
+- Made Team chat discoverable with an online count, active-file links, message timestamps, and unread live-message badges.
+- Restored chat history and active-file presence on reconnect; kept background terminal/file sockets from hiding a teammate's active file.
+- Added persisted per-member notices for commits, pulls, and branch merges, with a refresh action that preserves collaborative edits.
+- Added integration coverage for membership, offline notices, chat persistence, viewer restrictions, presence, and version review isolation.
+
 ## Unreleased — Phase 2, Step 16
 
 - Added one isolated Docker preview per temporary task branch, exposed only through an authenticated Together proxy route.

@@ -46,6 +46,7 @@ model User {
   createdInvites              Invite[]          @relation("InviteCreator")
   chatMessages                ChatMessage[]
   activityLogs                ActivityLog[]
+  assistantMessages           AssistantMessage[]
 }
 
 model Workspace {
@@ -68,8 +69,21 @@ model Workspace {
   branches      Branch[]
   preview       Preview?
   activityLogs  ActivityLog[]
+  assistantMessages AssistantMessage[]
 
   @@index([ownerId])
+}
+
+model AssistantMessage {
+  id          String    @id @default(cuid())
+  workspaceId String
+  userId      String
+  question    String
+  answer      String
+  createdAt   DateTime  @default(now())
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@index([workspaceId, createdAt])
 }
 
 model Preview {
@@ -146,6 +160,7 @@ model WorkspaceMember {
   userId      String
   role        WorkspaceRole
   joinedAt    DateTime      @default(now())
+  versionsSeenAt DateTime?
   workspace   Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   user        User          @relation(fields: [userId], references: [id], onDelete: Cascade)
 

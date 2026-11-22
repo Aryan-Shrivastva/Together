@@ -105,7 +105,8 @@ export class PreviewService {
         });
         await this.connectServer(preview.id, network.id);
         const sourcePath = await this.workspaceVolumePath(workspaceId);
-        const datasetsPath = await workspaceDataService.syncWorkspaceDatasets(workspaceId);
+        await workspaceDataService.syncWorkspaceDatasets(workspaceId);
+        const datasetsPath = resolve(sourcePath, '.together', 'datasets');
         const container = await this.docker.createContainer({
           name: previewContainerName(preview.id),
           Image: env.WORKSPACE_RUNTIME_IMAGE,

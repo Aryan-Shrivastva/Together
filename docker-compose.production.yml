@@ -16,7 +16,9 @@ services:
       retries: 12
 
   minio:
-    image: minio/minio:RELEASE.2025-10-15T17-29-55Z
+    build:
+      context: .
+      dockerfile: storage/Dockerfile
     restart: unless-stopped
     command: server /data
     environment:
@@ -25,6 +27,30 @@ services:
     volumes:
       - minio_data_production:/data
     networks: [backend]
+
+  workspace-init:
+    image: node:22-alpine
+    network_mode: none
+    command: ['chown', '1000:1000', '/data/workspaces']
+    read_only: true
+    cap_drop: [ALL]
+    cap_add: [CHOWN]
+    volumes:
+      - workspace_data_production:/data/workspaces
+    restart: 'no'
+
+  migrate:
+    build:
+      context: .
+      dockerfile: server/Dockerfile.production
+      target: migrate
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:?Set POSTGRES_USER}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:?Set POSTGRES_DB}?schema=public
+    networks: [backend]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: 'no'
 
   runtime-image:
     build:
@@ -35,7 +61,9 @@ services:
     restart: 'no'
 
   docker-proxy:
-    image: tecnativa/docker-socket-proxy:0.3.0
+    build:
+      context: .
+      dockerfile: docker-proxy/Dockerfile
     restart: unless-stopped
     environment:
       CONTAINERS: '1'
@@ -55,12 +83,15 @@ services:
       SWARM: '0'
       SYSTEM: '0'
     read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=16m
+      - /run:rw,noexec,nosuid,size=1m
     security_opt:
       - no-new-privileges:true
     cap_drop: [ALL]
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
-    networks: [backend]
+    networks: [docker-control]
 
   server:
     build:
@@ -110,9 +141,11 @@ services:
       GITHUB_OAUTH_REDIRECT_URL: ${GITHUB_OAUTH_REDIRECT_URL:?Set the HTTPS GitHub callback URL}
       JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in the production environment}
       TOKEN_ENCRYPTION_KEY: ${TOKEN_ENCRYPTION_KEY:?Set TOKEN_ENCRYPTION_KEY in the production environment}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4.1-mini}
     volumes:
       - workspace_data_production:/data/workspaces
-    networks: [backend]
+    networks: [backend, docker-control, outbound]
     depends_on:
       postgres:
         condition: service_healthy
@@ -120,8 +153,20 @@ services:
         condition: service_completed_successfully
       docker-proxy:
         condition: service_started
+      workspace-init:
+        condition: service_completed_successfully
+      migrate:
+        condition: service_completed_successfully
+      minio:
+        condition: service_started
     healthcheck:
-      test: ['CMD', 'node', '-e', "fetch('http://127.0.0.1:4000/health').then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://127.0.0.1:4000/health').then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))",
+        ]
 
   client:
     build:
@@ -129,6 +174,8 @@ services:
       dockerfile: client/Dockerfile.production
     restart: unless-stopped
     read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=32m
     security_opt:
       - no-new-privileges:true
     cap_drop: [ALL]
@@ -165,3 +212,6 @@ networks:
   edge:
   backend:
     internal: true
+  docker-control:
+    internal: true
+  outbound:
