@@ -452,7 +452,7 @@ export function WorkspaceExplorer({ workspaceId }: { workspaceId: string }) {
     'terminal',
   );
   const [isCollaborationPanelOpen, setIsCollaborationPanelOpen] = useState(false);
-  const [teamPanel, setTeamPanel] = useState<'chat' | 'assistant'>('chat');
+  const [teamPanel, setTeamPanel] = useState<'chat' | 'assistant' | 'workspace'>('chat');
   const [unreadMessages, setUnreadMessages] = useState(0);
   const [versionCheckKey, setVersionCheckKey] = useState(0);
   const [gitStatus, setGitStatus] = useState<GitStatus | null>(null);
@@ -2269,7 +2269,7 @@ export function WorkspaceExplorer({ workspaceId }: { workspaceId: string }) {
                     ×
                   </button>
                 </div>
-                <div className="flex gap-4 border-b border-[#51483e] px-5 text-xs">
+                <div className="grid grid-cols-3 border-b border-[#51483e] px-2 text-center text-[11px] sm:text-xs">
                   <button
                     type="button"
                     aria-pressed={teamPanel === 'chat'}
@@ -2294,9 +2294,25 @@ export function WorkspaceExplorer({ workspaceId }: { workspaceId: string }) {
                   >
                     AI assistant
                   </button>
+                  <button
+                    type="button"
+                    aria-pressed={teamPanel === 'workspace'}
+                    className={
+                      teamPanel === 'workspace'
+                        ? 'border-b-2 border-cyan-300 px-1 py-3 text-cyan-100'
+                        : 'px-1 py-3 text-[#a89984]'
+                    }
+                    onClick={() => setTeamPanel('workspace')}
+                  >
+                    Workspace assistant
+                  </button>
                 </div>
-                {teamPanel === 'assistant' ? (
-                  <WorkspaceAssistant workspaceId={workspaceId} isViewer={isViewer} />
+                {teamPanel !== 'chat' ? (
+                  <WorkspaceAssistant
+                    workspaceId={workspaceId}
+                    isViewer={isViewer}
+                    mode={teamPanel}
+                  />
                 ) : (
                   <>
                     <div className="max-h-[35%] overflow-y-auto border-b border-[#51483e] px-5 py-4">

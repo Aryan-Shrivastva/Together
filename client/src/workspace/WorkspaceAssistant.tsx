@@ -21,9 +21,11 @@ type AgentTask = {
 export function WorkspaceAssistant({
   workspaceId,
   isViewer,
+  mode,
 }: {
   workspaceId: string;
   isViewer: boolean;
+  mode: 'assistant' | 'workspace';
 }) {
   const [messages, setMessages] = useState<AssistantMessage[]>([]);
   const [question, setQuestion] = useState('');
@@ -42,10 +44,11 @@ export function WorkspaceAssistant({
     if (response.ok) setTasks(((await response.json()) as { tasks: AgentTask[] }).tasks);
   }, [tasksEndpoint]);
   useEffect(() => {
+    if (mode !== 'workspace') return;
     void loadTasks();
     const timer = window.setInterval(() => void loadTasks(), 5000);
     return () => window.clearInterval(timer);
-  }, [loadTasks]);
+  }, [loadTasks, mode]);
   async function launchTask() {
     if (!taskPrompt.trim() || busy) return;
     setBusy(true);
@@ -137,61 +140,73 @@ export function WorkspaceAssistant({
       setBusy(false);
     }
   }
+  if (mode === 'workspace') {
+    return (
+      <div className="flex min-h-0 flex-1 flex-col p-4 text-xs">
+        <h3 className="text-sm font-semibold">Workspace assistant</h3>
+        <div className="mt-3 min-h-0 flex-1 overflow-auto rounded border border-[#51483e] p-2">
+          <p className="font-semibold">Shared agent tasks</p>
+          <p className="mt-1 text-[#a89984]">
+            Creates a branch and runs available checks. Teammates can see task details; review
+            before merging. Relevant code is sent to OpenAI.
+          </p>
+          {!isViewer && (
+            <>
+              <textarea
+                aria-label="Agent task"
+                className="mt-2 h-16 w-full rounded border border-[#6b655c] bg-[#1c1b19] p-2"
+                value={taskPrompt}
+                onChange={(event) => setTaskPrompt(event.target.value)}
+                maxLength={4000}
+                placeholder="Describe the feature for the agent…"
+              />
+              <button
+                type="button"
+                className="rounded bg-cyan-500 px-3 py-1 text-slate-950 disabled:opacity-40"
+                disabled={busy || !taskPrompt.trim()}
+                onClick={() => void launchTask()}
+              >
+                Launch agent
+              </button>
+            </>
+          )}
+          {tasks.map((task) => (
+            <div
+              key={task.id}
+              className="mt-2 whitespace-pre-wrap break-words border-t border-[#51483e] pt-2"
+            >
+              <strong>{task.username}</strong> · {task.status}
+              <p>{task.prompt}</p>
+              <p className="text-cyan-200">{task.progress}</p>
+              {task.branchName && (
+                <p>
+                  {task.branchName}{' '}
+                  {task.branchWorkspaceId && (
+                    <a className="underline" href={`/workspaces/${task.branchWorkspaceId}`}>
+                      Open branch
+                    </a>
+                  )}
+                </p>
+              )}
+              {task.result && <p className="mt-1">{task.result}</p>}
+            </div>
+          ))}
+        </div>
+        {error && (
+          <p role="alert" className="mt-2 text-amber-200">
+            {error}
+          </p>
+        )}
+      </div>
+    );
+  }
   return (
     <div className="flex min-h-0 flex-1 flex-col p-4 text-xs">
-      <h3 className="text-sm font-semibold">Workspace assistant</h3>
+      <h3 className="text-sm font-semibold">AI assistant</h3>
       <p className="mt-1 text-[#a89984]">
         Ask about the project, chat, activity, or a selected file. Relevant repository excerpts and
         conversation context are sent to OpenAI.
       </p>
-      <div className="mt-3 max-h-64 shrink-0 overflow-auto rounded border border-[#51483e] p-2">
-        <p className="font-semibold">Shared agent tasks</p>
-        <p className="mt-1 text-[#a89984]">
-          Creates a branch and runs available checks. Teammates can see task details; review before
-          merging. Relevant code is sent to OpenAI.
-        </p>
-        {!isViewer && (
-          <>
-            <textarea
-              aria-label="Agent task"
-              className="mt-2 h-16 w-full rounded border border-[#6b655c] bg-[#1c1b19] p-2"
-              value={taskPrompt}
-              onChange={(event) => setTaskPrompt(event.target.value)}
-              maxLength={4000}
-              placeholder="Describe the feature for the agent…"
-            />
-            <button
-              type="button"
-              className="rounded bg-cyan-500 px-3 py-1 text-slate-950 disabled:opacity-40"
-              disabled={busy || !taskPrompt.trim()}
-              onClick={() => void launchTask()}
-            >
-              Launch agent
-            </button>
-          </>
-        )}
-        {tasks.map((task) => (
-          <div
-            key={task.id}
-            className="mt-2 whitespace-pre-wrap break-words border-t border-[#51483e] pt-2"
-          >
-            <strong>{task.username}</strong> · {task.status}
-            <p>{task.prompt}</p>
-            <p className="text-cyan-200">{task.progress}</p>
-            {task.branchName && (
-              <p>
-                {task.branchName}{' '}
-                {task.branchWorkspaceId && (
-                  <a className="underline" href={`/workspaces/${task.branchWorkspaceId}`}>
-                    Open branch
-                  </a>
-                )}
-              </p>
-            )}
-            {task.result && <p className="mt-1">{task.result}</p>}
-          </div>
-        ))}
-      </div>
       <div
         role="log"
         className="mt-3 min-h-0 flex-1 space-y-3 overflow-auto rounded-xl border border-[#45413a] bg-[#1b1b19] p-3"
