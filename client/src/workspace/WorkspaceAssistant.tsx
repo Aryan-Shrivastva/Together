@@ -37,6 +37,7 @@ export function WorkspaceAssistant({
   const [branchId, setBranchId] = useState('');
   const [taskPrompt, setTaskPrompt] = useState('');
   const [tasks, setTasks] = useState<AgentTask[]>([]);
+  useEffect(() => setError(null), [mode]);
   const endpoint = `/api/workspaces/${workspaceId}/assistant`;
   const tasksEndpoint = `/api/workspaces/${workspaceId}/agent-tasks`;
   const loadTasks = useCallback(async () => {

@@ -10,6 +10,48 @@ import { collaborationService } from './collaborationService.js';
 import { workspaceService } from './workspaceService.js';
 
 export class GitService {
+  async history(workspaceId: string) {
+    const git = await this.git(workspaceId);
+    const history = await git.log({ maxCount: 30 });
+    return history.all.map(({ hash, date, message, author_name }) => ({
+      hash,
+      date,
+      message,
+      author: author_name,
+    }));
+  }
+
+  async historyFiles(workspaceId: string, commit: string) {
+    const git = await this.git(workspaceId);
+    await git.raw(['merge-base', '--is-ancestor', commit, 'HEAD']);
+    const output = await git.raw([
+      'diff-tree',
+      '--root',
+      '--no-commit-id',
+      '--name-only',
+      '-r',
+      '-z',
+      commit,
+    ]);
+    return output.split('\0').filter(Boolean).slice(0, 200);
+  }
+
+  async historyDiff(workspaceId: string, commit: string, path: string) {
+    const git = await this.git(workspaceId);
+    const files = await this.historyFiles(workspaceId, commit);
+    if (!files.includes(path)) throw new HttpError(404, 'File not found in this commit.');
+    const diff = await git.raw([
+      'show',
+      '--format=',
+      '--no-ext-diff',
+      '--no-textconv',
+      '--no-renames',
+      commit,
+      '--',
+      `:(literal)${path}`,
+    ]);
+    return { diff: diff.slice(0, 100000), truncated: diff.length > 100000 };
+  }
   private throwGitError(operation: 'status' | 'commit' | 'pull' | 'push', error: unknown): never {
     const message = error instanceof Error ? error.message.toLowerCase() : '';
 

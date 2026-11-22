@@ -17,6 +17,8 @@ const commitSchema = z
 
 export const gitRouter = Router();
 
+const commitHash = z.string().regex(/^[a-f0-9]{40}$/);
+
 async function requireMember(workspaceId: string, userId: string | undefined) {
   if (!userId) {
     throw new HttpError(401, 'Authentication is required.');
@@ -32,6 +34,53 @@ async function requireEditor(workspaceId: string, userId: string | undefined) {
 
   return membershipService.requireEditor(workspaceId, userId);
 }
+
+gitRouter.get(
+  '/workspaces/:workspaceId/git/history',
+  gitRateLimit,
+  async (request, response, next) => {
+    try {
+      const id = workspaceIdSchema.parse(request.params.workspaceId);
+      await requireMember(id, request.authUser?.sub);
+      response.json({ commits: await gitService.history(id) });
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+gitRouter.get(
+  '/workspaces/:workspaceId/git/history/:commit',
+  gitRateLimit,
+  async (request, response, next) => {
+    try {
+      const id = workspaceIdSchema.parse(request.params.workspaceId);
+      await requireMember(id, request.authUser?.sub);
+      response.json({
+        files: await gitService.historyFiles(id, commitHash.parse(request.params.commit)),
+      });
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+gitRouter.get(
+  '/workspaces/:workspaceId/git/history/:commit/diff',
+  gitRateLimit,
+  async (request, response, next) => {
+    try {
+      const id = workspaceIdSchema.parse(request.params.workspaceId);
+      await requireMember(id, request.authUser?.sub);
+      const path = z.string().min(1).max(1024).parse(request.query.path);
+      response.json(
+        await gitService.historyDiff(id, commitHash.parse(request.params.commit), path),
+      );
+    } catch (error) {
+      next(error);
+    }
+  },
+);
 
 gitRouter.get(
   '/workspaces/:workspaceId/git/status',

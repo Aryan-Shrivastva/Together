@@ -186,3 +186,24 @@ test('assistant creates a reviewable branch edit and reports actual test output'
     await prisma.$disconnect();
   }
 });
+
+test('branch test gives actionable feedback when root package.json is missing', async () => {
+  const { membershipService } = await import('../src/services/membershipService.js');
+  const { HttpError } = await import('../src/errors/httpError.js');
+  const restore = [
+    replace(prisma.branch, 'findFirst', async () => ({ branchWorkspaceId: 'branch' })),
+    replace(membershipService, 'requireEditor', async () => ({ role: 'OWNER' })),
+    replace(fileService, 'readTextFile', async () => {
+      throw new HttpError(404, 'The file or directory does not exist.');
+    }),
+  ];
+  try {
+    await assert.rejects(
+      () => assistantService.runTests('workspace-a', 'user-a', 'branch-id'),
+      /no package\.json at the repository root/,
+    );
+  } finally {
+    restore.reverse().forEach((fn) => fn());
+    await prisma.$disconnect();
+  }
+});

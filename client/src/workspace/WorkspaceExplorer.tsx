@@ -12,6 +12,7 @@ import * as Y from 'yjs';
 import { useAuth } from '../auth/AuthContext';
 import { WorkspaceUpdates } from './WorkspaceUpdates';
 import { WorkspaceAssistant } from './WorkspaceAssistant';
+import { WorkspaceHistory } from './WorkspaceHistory';
 
 loader.config({ monaco });
 
@@ -2315,6 +2316,7 @@ export function WorkspaceExplorer({ workspaceId }: { workspaceId: string }) {
                   />
                 ) : (
                   <>
+                    <WorkspaceHistory workspaceId={workspaceId} />
                     <div className="max-h-[35%] overflow-y-auto border-b border-[#51483e] px-5 py-4">
                       <h3 className="text-sm font-semibold">Online now ({presence.length})</h3>
                       <div className="mt-2 space-y-2 text-xs text-[#d4bd99]">

@@ -18,7 +18,18 @@ export class AssistantService {
     const branch = await prisma.branch.findFirst({ where: { id: branchId, workspaceId } });
     if (!branch?.branchWorkspaceId) throw new HttpError(404, 'Task branch not found.');
     await membershipService.requireEditor(branch.branchWorkspaceId, userId);
-    const file = await fileService.readTextFile(branch.branchWorkspaceId, 'package.json');
+    let file: { path: string; content: string };
+    try {
+      file = await fileService.readTextFile(branch.branchWorkspaceId, 'package.json');
+    } catch (error) {
+      if (error instanceof HttpError && error.statusCode === 404) {
+        throw new HttpError(
+          404,
+          'This branch has no package.json at the repository root, so Run npm test cannot run. Check the project folder and its test setup.',
+        );
+      }
+      throw error;
+    }
     let manifest: { scripts?: Record<string, unknown> };
     try {
       manifest = JSON.parse(file.content) as typeof manifest;
@@ -51,7 +62,19 @@ export class AssistantService {
     )
       throw new HttpError(400, 'This file cannot be sent to the assistant.');
     await collaborationService.flushWorkspace(workspaceId);
-    const file = safePath ? await fileService.readTextFile(workspaceId, safePath) : null;
+    let file: { path: string; content: string } | null = null;
+    if (safePath) {
+      try {
+        file = await fileService.readTextFile(workspaceId, safePath);
+      } catch (error) {
+        if (error instanceof HttpError && error.statusCode === 404)
+          throw new HttpError(
+            404,
+            `The selected file "${safePath}" was not found in this workspace. Check the path or leave it blank.`,
+          );
+        throw error;
+      }
+    }
     if (file && Buffer.byteLength(file.content, 'utf8') > 30_000)
       throw new HttpError(413, 'The selected file is too large for an assistant task.');
     const repositoryContext = await retrieveRepositoryContext(
