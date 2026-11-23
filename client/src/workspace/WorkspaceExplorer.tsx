@@ -797,7 +797,16 @@ export function WorkspaceExplorer({ workspaceId }: { workspaceId: string }) {
 
   useEffect(() => {
     const host = terminalHostRef.current;
-    if (workspace?.status !== 'READY' || isViewer || !isBottomPanelOpen || !host) return undefined;
+    if (
+      workspace?.status !== 'READY' ||
+      isViewer ||
+      !isBottomPanelOpen ||
+      activeBottomPanel !== 'terminal' ||
+      !host
+    )
+      return undefined;
+
+    setTerminalStatus('Connecting shared terminal…');
 
     const terminal = new Terminal({
       cursorBlink: true,
@@ -834,7 +843,7 @@ export function WorkspaceExplorer({ workspaceId }: { workspaceId: string }) {
     );
 
     socket.on('connect', () => {
-      setTerminalStatus('Shared terminal connected.');
+      setTerminalStatus('Starting shared terminal…');
       setTerminalError(null);
       socket.emit('terminal:attach');
       resize();
@@ -842,6 +851,7 @@ export function WorkspaceExplorer({ workspaceId }: { workspaceId: string }) {
     socket.on('disconnect', () => setTerminalStatus('Reconnecting shared terminal…'));
     socket.on('connect_error', () => setTerminalStatus('Reconnecting shared terminal…'));
     socket.on('terminal:reset', (payload: { output?: string; tasks?: TerminalTasks }) => {
+      setTerminalStatus('Shared terminal connected.');
       terminal.clear();
       if (payload.output) terminal.write(payload.output);
       if (payload.tasks) setTerminalTasks(payload.tasks);
@@ -863,7 +873,14 @@ export function WorkspaceExplorer({ workspaceId }: { workspaceId: string }) {
       terminalSocketRef.current = null;
       terminal.dispose();
     };
-  }, [isBottomPanelOpen, isViewer, terminalReconnectVersion, workspace?.status, workspaceId]);
+  }, [
+    activeBottomPanel,
+    isBottomPanelOpen,
+    isViewer,
+    terminalReconnectVersion,
+    workspace?.status,
+    workspaceId,
+  ]);
 
   useEffect(() => {
     if (workspace?.status === 'READY' && isGitPanelOpen) {
