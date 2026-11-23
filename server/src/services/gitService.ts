@@ -89,6 +89,13 @@ export class GitService {
       );
     }
 
+    if (message.includes('could not resolve host') || message.includes('failed to connect')) {
+      throw new HttpError(
+        502,
+        'The server could not reach GitHub. Check the network connection and try again.',
+      );
+    }
+
     console.error(`Git ${operation} failed.`);
     throw new HttpError(502, `Git ${operation} failed. Check the repository state and try again.`);
   }
@@ -98,6 +105,7 @@ export class GitService {
       baseDir: workspaceService.getRoot(workspaceId),
       timeout: { block: env.WORKSPACE_CLONE_TIMEOUT_MS },
       unsafe: { allowUnsafeConfigEnvCount: true },
+      allowEnvironment: ['GIT_CONFIG_COUNT', 'GIT_CONFIG_KEY_0', 'GIT_CONFIG_VALUE_0'],
     };
     if (!authenticated) return simpleGit(options);
     const workspace = await prisma.workspace.findUnique({
@@ -125,7 +133,7 @@ export class GitService {
   async status(workspaceId: string) {
     try {
       await collaborationService.flushWorkspace(workspaceId);
-      return (await this.git(workspaceId)).status();
+      return await (await this.git(workspaceId)).status();
     } catch (error) {
       if (error instanceof HttpError) {
         throw error;
@@ -149,7 +157,7 @@ export class GitService {
       await git.add(files?.length ? files : ['.']);
       await git.addConfig('user.name', user.username);
       await git.addConfig('user.email', user.email ?? `${user.username}@users.noreply.github.com`);
-      return git.commit(message);
+      return await git.commit(message);
     } catch (error) {
       if (error instanceof HttpError) {
         throw error;
@@ -178,7 +186,7 @@ export class GitService {
   async push(workspaceId: string) {
     try {
       await collaborationService.flushWorkspace(workspaceId);
-      return (await this.git(workspaceId, true)).push('origin', 'HEAD');
+      return await (await this.git(workspaceId, true)).push('origin', 'HEAD');
     } catch (error) {
       if (error instanceof HttpError) {
         throw error;
